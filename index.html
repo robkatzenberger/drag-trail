@@ -1,0 +1,2247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>THE DRAG CIRCUIT</title>
+<style>
+  :root { --bg: #000000; --fg: #33ff33; --dim: #1f7a1f; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font-family: "Courier New", Courier, ui-monospace, monospace;
+    font-size: 18px; line-height: 1.35; min-height: 100%;
+  }
+  body { padding: 12px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  #crt {
+    max-width: 42rem; margin: 0 auto; min-height: calc(100vh - 24px);
+    border: 2px solid var(--fg); padding: 16px 16px 20px;
+    display: flex; flex-direction: column;
+  }
+  header.hud {
+    border-bottom: 1px solid var(--dim); padding-bottom: 8px; margin-bottom: 12px;
+    color: var(--dim); font-size: 0.95rem; white-space: pre-wrap;
+  }
+  header.hud strong { color: var(--fg); font-weight: normal; }
+  #art {
+    white-space: pre; font-size: 0.85rem; line-height: 1.15;
+    color: var(--fg); overflow-x: auto; margin: 0 0 12px;
+  }
+  #text { white-space: pre-wrap; flex: 1; margin: 0 0 14px; }
+  .dim { color: var(--dim); }
+  input[type="text"], input[type="number"] {
+    background: var(--bg); color: var(--fg); border: 2px solid var(--fg);
+    font: inherit; padding: 10px 12px; width: 100%; outline: none;
+    border-radius: 0; margin: 8px 0 12px;
+  }
+  input:focus { background: #000000; }
+  .choices { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+  button {
+    background: var(--bg); color: var(--fg); border: 2px solid var(--fg);
+    font: inherit; text-align: left; padding: 12px 14px; min-height: 48px;
+    cursor: pointer; border-radius: 0; width: 100%;
+  }
+  button:hover, button:focus { background: var(--fg); color: var(--bg); outline: none; }
+  button:disabled { border-color: var(--dim); color: var(--dim); cursor: not-allowed; }
+  button:disabled:hover { background: var(--bg); color: var(--dim); }
+  .row { display: flex; gap: 8px; }
+  .row button { flex: 1; }
+  .log {
+    color: var(--dim); max-height: 8rem; overflow-y: auto; white-space: pre-wrap;
+    margin-bottom: 10px; border-top: 1px solid var(--dim); padding-top: 8px;
+  }
+  #tree-field {
+    white-space: pre; font-size: 0.95rem; line-height: 1.15; min-height: 8rem;
+    border: 1px solid var(--dim); padding: 8px; margin-bottom: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="crt">
+  <header class="hud" id="hud" hidden></header>
+  <pre id="art"></pre>
+  <div id="text"></div>
+  <div class="log" id="log" hidden></div>
+  <div id="extra"></div>
+  <div class="choices" id="choices"></div>
+</div>
+<script>
+(() => {
+  const SAVE_KEY = "drag-circuit-save-v1";
+  const SCORES_KEY = "drag-circuit-scores-v1";
+
+  const CLASSES = {
+    street: {
+      id: "street", name: "STREET / BRACKET", cash: 2200, multiplier: 1,
+      fuelName: "race gas", baseET: 9.72, baseMPH: 137, tree: "sportsman",
+      fuelPerRun: 1, slickPerRun: 0.5,
+      blurb: "A stout bracket car and a padded wallet. You run a sportsman tree. The plan is to stay out all season, cash the rounds, and sneak up the standings."
+    },
+    promod: {
+      id: "promod", name: "PRO MOD", cash: 1100, multiplier: 2,
+      fuelName: "methanol", baseET: 5.86, baseMPH: 248, tree: "pro",
+      fuelPerRun: 2, slickPerRun: 1,
+      blurb: "A doorslammer with big power and a thinner budget. You run a pro tree. Fast enough to headline, expensive enough to end a season."
+    },
+    topfuel: {
+      id: "topfuel", name: "TOP FUEL", cash: 550, multiplier: 3,
+      fuelName: "nitro", baseET: 3.79, baseMPH: 328, tree: "pro",
+      fuelPerRun: 3, slickPerRun: 1,
+      blurb: "The long, loud cars. Short money, tall appetite for parts. A pro tree. Every round can make the season — or unmake the car."
+    }
+  };
+
+  const ROLES = ["Crew Chief", "Tuner", "Mechanic"];
+  const DEFAULT_NAMES = ["Hank", "Vee", "Rosa"];
+
+  const ILLNESSES = [
+    { id: "burnout", name: "crew burnout", severity: 2 },
+    { id: "nitrohead", name: "a nitro headache", severity: 2 },
+    { id: "sunbake", name: "pit-lane sunbake", severity: 1 },
+    { id: "wrenchback", name: "a wrenched back", severity: 2 },
+    { id: "badcoffee", name: "motel-coffee regret", severity: 1 },
+    { id: "earring", name: "starter-whine tinnitus", severity: 1 },
+    { id: "heat", name: "a heat-soaked slump", severity: 2 },
+    { id: "greaseflu", name: "the grease-flu", severity: 2 }
+  ];
+
+  const STORE_ITEMS = [
+    { key: "slicks", name: "slicks", unit: "tire", start: 30, track: 42 },
+    { key: "fuel", name: "fuel cans", unit: "can", start: 6, track: 9 },
+    { key: "parts", name: "engine parts", unit: "crate", start: 45, track: 65 },
+    { key: "trans", name: "spare transmissions", unit: "spare", start: 60, track: 90 },
+    { key: "chutes", name: "parachutes", unit: "pack", start: 35, track: 50 },
+    { key: "food", name: "cooler food", unit: "meal", start: 0.5, track: 0.8 }
+  ];
+
+  const TRACKS = [
+    { name: "Texas Motorplex, Ennis", short: "Ennis", mile: 0, daysFromPrev: 0, fee: 40, purse: 400,
+      kind: "opener", note: "Where the season opens, under a wide Texas sky." },
+    { name: "Gulf Coast Dragway, Houston", short: "Houston", mile: 230, daysFromPrev: 2, fee: 50, purse: 480,
+      kind: "event", note: "Hot air, heavy air, and a shutdown area with opinions." },
+    { name: "Red River Strip, Oklahoma", short: "Red River", mile: 500, daysFromPrev: 3, fee: 55, purse: 520,
+      kind: "event", note: "Wind across the plains, and a staging lane that feels a mile long." },
+    { name: "Gainesville Dragway, Florida", short: "Gainesville", mile: 1320, daysFromPrev: 8, fee: 70, purse: 700,
+      kind: "event", note: "A long haul east. Palms, humidity, and a crowd that knows a good light." },
+    { name: "Sandhills Motorpark, Carolinas", short: "Sandhills", mile: 1720, daysFromPrev: 4, fee: 70, purse: 720,
+      kind: "event", note: "Pine pollen on the slicks and sweet tea in the pits." },
+    { name: "Thunder Valley, Bristol", short: "Bristol", mile: 1960, daysFromPrev: 3, fee: 85, purse: 900,
+      kind: "event", note: "The hills hold the noise and throw it back at you." },
+    { name: "Mid-America Dragway, Illinois", short: "Mid-America", mile: 2340, daysFromPrev: 4, fee: 90, purse: 1000,
+      kind: "event", note: "A last tune-up before the Big Go. The field is paying attention." },
+    { name: "The Big Go, Indianapolis", short: "The Big Go", mile: 2520, daysFromPrev: 2, fee: 120, purse: 1800,
+      kind: "finale", note: "The finale. Points, pride, and a shutdown area as wide as a rumor." }
+  ];
+
+  const RIVAL_NAMES = [
+    "Sally Short-Light", "Doc Brakes", "Boomer Calhoun", "Rita Lane",
+    "Two-Lane Tony", "Mabel Ortiz", "Junior Pike", "Nitro Nell",
+    "Hickory Jones", "Coach Winters", "The Night Shift", "Lane Harper",
+    "Pep Coronado", "Wren Malloy", "Big June Keeler", "Cal 'Clutch' Dwyer"
+  ];
+
+  const ART = {
+    title: "  THE DRAG CIRCUIT\n\n      _______\n  ___/       \\___\n |    HAULER     |=======\\____\n |_______________|  [==]  \\___\\___\n    0         0              \\___\\___==>\n                                  '-----'\n",
+    hauler: "      _______\n  ___/       \\___\n |    HAULER     |=======\\\n |_______________|  [==]  \\\n    0         0\n",
+    car: "          ____\n   ______/    \\______\n  |     DRAGSTER     |=======>>\n  |__________________|\n    O              O\n",
+    tree: "       [TREE]\n      .     .\n      o     o   PRE\n      o     o   STG\n      *     *\n      *     *\n      *     *\n      G     G\n",
+    track: "  ==================================================\n   STAGING              1/4 MILE            SHUTDOWN\n  ==================================================\n          ____\n   ______/    \\______\n  |     DRAGSTER     |=======>>\n  |__________________|\n    O              O\n",
+    pits: "   +-----+  +-----+  +-----+\n   |PIT 1|  |PIT 2|  | YOU |\n   +-----+  +-----+  +-----+\n    ~~~~ awnings, wrenches, radio ~~~~\n",
+    shop: "  ______________________________\n |   EDDIE'S RACE SHOP, ENNIS  |\n |   slicks  fuel  parts  food |\n |______________[]_____________|\n",
+    motel: "    _____    _____    _____\n   |  *  |  |  *  |  | YOU |\n   |_____|  |_____|  |_____|\n    vacancy  vacancy   maybe\n",
+    smoke: "     (  )  ( )   (  )\n      ( ) (  )  ( )\n          ____\n   ______/    \\______\n  |   * cough *      |=======>>\n  |__________________|\n    O              O\n",
+    trophy: "        .-====-.\n       /  CUP   \\\\\n       |        |\n        '------'\n         ||  ||\n        ========\n      THE BIG GO\n",
+    grave: "        ______\n       /      \\\\\n      |  REST  |\n      |        |\n      |________|\n"
+  };
+
+  const TUNES = {
+    safe: { id: "safe", name: "Safe", etAdj: 0.06, risk: 0.35, label: "Safe tune (consistent, slower)" },
+    aggressive: { id: "aggressive", name: "Aggressive", etAdj: 0, risk: 1, label: "Aggressive tune (the usual)" },
+    allin: { id: "allin", name: "All-in", etAdj: -0.12, risk: 2.2, label: "All-in (quick or broken)" }
+  };
+
+  let S = null;
+  let keyHandler = null;
+  const ui = { screen: "title", storeBuy: {}, storeKind: "start", eventOpen: false, tree: null, pending: null };
+  const el = {};
+  function bindEls() {
+    el.hud = document.getElementById("hud");
+    el.art = document.getElementById("art");
+    el.text = document.getElementById("text");
+    el.log = document.getElementById("log");
+    el.extra = document.getElementById("extra");
+    el.choices = document.getElementById("choices");
+  }
+
+  function rand(n) { return Math.floor(Math.random() * n); }
+  function chance(p) { return Math.random() < p; }
+  function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+  function pick(arr) { return arr[rand(arr.length)]; }
+  function fmt(s, vars) {
+    return String(s).replace(/\{(\w+)\}/g, function (_, k) {
+      return (vars && vars[k] != null) ? String(vars[k]) : "";
+    });
+  }
+  function pickFrom(name, arr) {
+    if (!arr || !arr.length) return arr && arr[0];
+    if (!S) return arr[rand(arr.length)];
+    if (!S.lastStory) S.lastStory = {};
+    const last = S.lastStory[name];
+    const idxs = [];
+    for (let i = 0; i < arr.length; i++) if (i !== last) idxs.push(i);
+    const pickIdx = idxs.length ? idxs : arr.map(function (_, i) { return i; });
+    const i = pickIdx[rand(pickIdx.length)];
+    S.lastStory[name] = i;
+    return arr[i];
+  }
+  function story(name, vars) {
+    return fmt(pickFrom(name, STORIES[name] || ["..."]), vars || {});
+  }
+
+  function money(n) {
+    const x = Math.round((Number(n) || 0) * 100) / 100;
+    return "$" + x.toFixed(x % 1 ? 2 : 0);
+  }
+  function plural(n, w) { return n + " " + w + (n === 1 ? "" : "s"); }
+  function addDays(d, n) { const x = new Date(d.getTime()); x.setDate(x.getDate() + n); return x; }
+  function fmtDate(d) {
+    return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
+  }
+  function fmtET(n) { return (Math.round(n * 1000) / 1000).toFixed(3); }
+  function fmtRT(n) {
+    const sign = n < 0 ? "-" : "";
+    return sign + Math.abs(n).toFixed(3);
+  }
+  function fmtMPH(n) { return Math.round(n).toString(); }
+
+  function etToMph(et, cls) {
+    const c = CLASSES[cls] || CLASSES.street;
+    const ratio = c.baseET / Math.max(et, 0.5);
+    return clamp(c.baseMPH * Math.pow(ratio, 0.85), c.baseMPH * 0.6, c.baseMPH * 1.12);
+  }
+
+  const STORIES = {
+    haulerSpare: [
+      "The hauler coughs, then quits, on the shoulder. You spend a spare and a day. {name} mutters about 'preventive' like it is a religion.",
+      "A belt lets go with a sad slap. You had a spare. The day, you did not budget. The hauler rolls again by supper.",
+      "The hauler's {part} files a resignation. You install a spare in a rest-area ballet. A day vanishes.",
+      "A warning light you have been ignoring becomes a conversation. Spare in, day gone, road still west-or-east, depending.",
+      "You lose a day swapping a tired {part}. The spare was why you packed like a pessimist. Good.",
+      "The hauler requests a new {part} in a very calm rattle. You had a spare. You spend a day proving it.",
+    ],
+    haulerNoSpare: [
+      "The hauler's {part} is done, and the spare hook is a joke. You spend 3 days improvising with zip ties, a forum post, and stubbornness.",
+      "No spare {part}. A three-day repair in a lot that has one working light. The hauler looks embarrassed, then agrees to roll.",
+      "You invent a {part} out of patience and a hardware-aisle hope. Three days later, it holds. Mostly.",
+      "The {part} failed in a county with more cows than parts stores. Three days of improvising. The result is ugly and functional.",
+      "You cobble a {part} together over 3 days. A warranty would not recognize it. The next track still will.",
+      "Three days on the shoulder of pride. The improvised {part} will be a story. It will also, with luck, be a part.",
+    ],
+    motelNight: [
+      "A motel with a buzzing sign takes {n} for two beds and a suspicion of ice. The team sleeps like people who have been waked by diesel before.",
+      "You spend {n} on a room that smells faintly of clutch and hope. In the morning, the coffee is a dare.",
+      "The vacancy sign is half out. The room is all in, for {n}. {name} claims the bed by the door, 'for strategy.'",
+      "A night indoors, {n} poorer. The shower has opinions. The team has fewer.",
+      "You pay {n} for thin walls and a thick sleep. Someone next door is also going to a track, judging by the trailer hitch.",
+      "Motel math: {n} for a roof, a parking spot for the hauler, and a painting of a duck. Fair.",
+    ],
+    sponsorGood: [
+      "A regional parts outfit calls. They want a decal on the hauler and will send {n}. The decal is large. The check clears.",
+      "A small-town shop 'wants to be on the car, not in the way.' {n} lands. You promise a photo from the lanes.",
+      "A sponsor with more sincerity than typography wires {n}. They ask only that you try not to park in the fence.",
+      "A family-run oil shop backs the team for {n} and a handshake that lasts a little too long, in a good way.",
+      "You pick up a local backer: {n} and a sticker that says they believe in 'going rounds.' You intend to.",
+      "A radio parts hour turns into {n} and a promise to 'say the name nice.' You will.",
+    ],
+    sponsorBad: [
+      "A 'sponsor' wants a 'placement fee' first. The fee is {n}, and so is the last time you hear from them.",
+      "You almost believe the logo. The logo was a screenshot. {n} walks. Dignity jogs after it, then comes back.",
+      "A too-good deal, a too-fast invoice. You are down {n} and up one anecdote for the pit gossip.",
+      "They promised exposure. They meant your bank account, to the tune of {n}. You decline further exposure.",
+      "A hustle in a team shirt takes {n} for 'media assets' that turn out to be a blank folder.",
+      "The call was exciting. The follow-up was a card reader. {n} gone, lesson filed under 'why we have a crew chief.'",
+    ],
+    rainDelay: [
+      "A wall of rain parks the hauler. You lose {days} watching the radar like it owes you a green light.",
+      "The forecast was 'maybe.' The sky was 'definitely.' You lose {days} in a truck-stop conference about wipers.",
+      "Rain, then more rain, then a puddle with ambitions. Travel stalls for {days}.",
+      "The highway becomes a river without the courtesy of a name. You wait {days}.",
+      "You lose {days} to weather that has no respect for a race schedule. The team plays cards until the cards are damp.",
+      "A storm writes 'not today' on the windshield. {days} later, you are moving again.",
+    ],
+    foodStop: [
+      "A diner with a race-day special fills the cooler with {n} meals and a slice of pie that does not survive the parking lot.",
+      "You restock {n} meals at a grocery that has never seen a parachute pack and is very polite about it.",
+      "A barbecue stand by the highway trades smoke and {n} meals for a modest bill. The team is briefly unstoppable.",
+      "You find a grocer still open. {n} meals go in the cooler. {name} guards the hot sauce like a trophy.",
+      "A farm stand and a two-for-one on sandwiches: {n} meals. The hauler smells like tomatoes and optimism.",
+      "Food stop. {n} meals. A cashier asks if you 'do the racing.' You do the racing.",
+    ],
+    flatHauler: [
+      "The hauler throws a highway tire like a tantrum. You lose a day and a little dignity on the shoulder.",
+      "A flat, a sigh, a day. The spare was under three coolers. Of course it was.",
+      "You change a hauler tire in a wind that wants your hat. A day goes. The hat almost goes.",
+      "The bang was a tire, not the engine, which is the good news. The day you lose is the rest of the news.",
+      "Shoulder, jack, sun, one lost day. A passing racer honks in a language that means 'been there.'",
+      "A hauler flat costs you a day. {name} becomes an expert in lug nuts, aloud.",
+    ],
+    radioInterview: [
+      "A local radio morning show wants 'the visiting racer.' You talk about the car, the team, and not about the budget. They are kind.",
+      "You do a phone interview from a stall. The host says 'break a leg,' then apologizes, then says 'good light.' Better.",
+      "A station barely in range asks if the car is 'one of the loud ones.' It is. You are briefly a celebrity in one county.",
+      "You talk into a station bumper that says RACE WEEK. The questions are easy. {name} mouths the answers, helpfully.",
+      "A short interview, a shorter jingle, a feeling that the town is pulling for you. You pull back, a little.",
+      "The DJ cannot see the car and asks you to 'describe a burnout.' You do, with feeling, and no further detail.",
+    ],
+    wrongExit: [
+      "The copilot — human, this time — takes a confident exit that is confident about the wrong town. You lose {days} uninventing the route.",
+      "A detour sign and a stubborn GPS send you on a scenic tour of a county you did not need. {days} gone.",
+      "You follow a 'shortcut' recommended by a stranger with a hat. The shortcut is a character-building exercise lasting {days}.",
+      "Wrong exit, right amount of stubbornness. You lose {days} and gain a story about a very small museum of spoons.",
+      "The hauler visits a town that is not on the way, then another. {days} later, you are back on the line you meant.",
+      "You miss the exit, take the next one, and invent a new state. It takes {days} to uninvent it.",
+    ],
+    partsFind: [
+      "Behind a closed shop, a crate of useful leftovers has a sign that says TAKE WHAT YOU NEED. You take a {item}. You leave a thank-you.",
+      "A retiring racer waves you over and hands you a {item} 'so it does not rust in my barn.' You do not argue.",
+      "You find a {item} in a swap-meet pile priced at 'just take it.' You take it.",
+      "A spare {item} appears in a box that was supposed to be rags. This is the good kind of inventory error.",
+      "Someone in a folding chair sells you a nearly good {item} for almost nothing. You pay the almost, happily.",
+      "A {item} with a past and a future sits by a dumpster, which feels wrong, so you rescue it.",
+    ],
+    weighStation: [
+      "A weigh station is open and curious. You are legal, barely, and delayed, definitely. You lose part of a day to a tape measure.",
+      "The hauler is waved into a bay. The numbers are fine. The wait is a short novel. You roll on, stamped.",
+      "An inspector likes the car and not the paperwork. You fix the paperwork. An afternoon disappears.",
+      "You pass the scale, then explain the parachute to a person who has never packed one. Everyone is nicer after that.",
+      "A friendly delay at a weigh station. You lose hours, not luck. The coffee is worse than the motel's, which is a feat.",
+      "The station wants to talk about tongue weight. You talk about tongue weight. Eventually the road resumes.",
+    ],
+    rivalConvoy: [
+      "A rival's hauler pulls alongside. They are friendly, short on ice, and long on advice you already know. They wave. You wave.",
+      "You convoy for ten miles with {rival}, who claims their car 'only looks quick.' It looks quick. Then the road widens and you separate.",
+      "Another team at a fuel stop compares notes and burritos. {rival} wishes you a good light and means it about 70%.",
+      "You park next to a clean hauler. {rival} is in it, humming. A short, polite war of decals. Then everyone goes their way.",
+      "A familiar trailer number in the next stall: {rival}. You talk shutdown-area gossip and do not talk setups.",
+      "{rival} honks a complicated honk that means 'see you in the lanes.' You honk back, less complicated, equally sincere.",
+    ],
+    fanPhoto: [
+      "A kid at a rest area asks to see the car. You show the car. They salute the parachute pack. The team stands a little straighter.",
+      "Someone wants a photo with the slick, not the racer, which is honest. You oblige. {name} photobombs, slightly.",
+      "A couple in matching hats says they 'saw you at Ennis, or anyway a car like that.' You take the compliment in the spirit given.",
+      "A fan leaves a hand-drawn tree on the hauler door: ambers, then a very large green. You leave it there.",
+      "You sign a program that is actually a diner placemat. It still counts. The team agrees it counts.",
+      "A roadside hello turns into a mini-meet. No autographs, just a look under the wing. Everyone leaves happier, including the car, probably.",
+    ],
+    toolTheft: [
+      "In the night, a toolbox gets lighter. You are down some tools and up a very late camera notification that shows a blur with opinions.",
+      "Someone loved your wrenches more than you were using them. The night shift at this lot is theoretical.",
+      "A theft, small and rude. You tape a note that says PLEASE DON'T, for the next person, and check the remaining crates twice.",
+      "Tools walk off. {name} wants to write a thread. You suggest the thread wait until Indianapolis, or never.",
+      "The lot is very large and very quiet now. A socket set has a new life, somewhere down the road, without you.",
+      "You post in a local group. The comments are about a totally different parking lot. The tools remain gone.",
+    ],
+    heatWave: [
+      "A heat wave turns the cab into a thesis on air. Anyone without water starts to wilt. You take it easy and still lose a little steam.",
+      "The thermometer is a comedian. The crew is not laughing. A day of heat-soaked driving leaves everyone rectangular.",
+      "Hot. Then hotter. {name} claims the last cold pack. You do not fight them. The hauler drones on.",
+      "A heat advisory, a lot of water, a little patience. The road shimmers like a setup sheet in a dream.",
+      "The heat has a job and it is doing it. You drive mornings, nap midafternoon, and still feel cooked.",
+      "It is the kind of hot that makes the tires in the rack look tired already. The team talks less, which is either peace or melt.",
+    ],
+    goodWeather: [
+      "The weather is unfairly perfect. The hauler hums. Someone puts on a tape that is older than the car and exactly right.",
+      "Fair skies, a kind wind, a day that does not ask much. You make the miles like you meant them.",
+      "A beautiful stretch of road, which the team distrusts, then enjoys. No events. Just miles. A rare treat.",
+      "The day is clear and the radio is good. You take the gift and do not name it, in case it startles.",
+      "Perfect weather. The checklist is short. The horizon is on time.",
+      "A clean day, the sort you will forget to put in the recap and then remember in December.",
+    ],
+    paycheck: [
+      "A little prize money from a side bet you should not have made, except you won: +{n}. {name} does not approve, and also smiles.",
+      "You pick up a parts-refund check that had been following you like a loyal, slow dog. +{n}.",
+      "A weekend partner from last season finally settles up: +{n}. You had written it off. You un-write it.",
+      "An envelope at a shop from 'that time you loaned a trans.' +{n}. You remember. They remembered too.",
+      "A small, honest check for a tech column you barely recall writing. +{n}. Words, it turns out, also pay for fuel.",
+      "Found money, more or less: a rebate, a return, a surprise +{n}. The cooler gets ice immediately.",
+    ],
+    "arr:Texas Motorplex, Ennis": [
+      "Texas Motorplex, Ennis. The season starts under a sky that has room for a burnout. The pits are already a little city of awnings.",
+      "Ennis. The shop smell is still on your hands. The track is long, honest, and already loud. Welcome to the circuit.",
+      "The Motorplex sits in the Texas light like it has been waiting. Your hauler finds a pit. Someone else's generator is already arguing.",
+      "Opening day energy, even if it is not opening day for anyone but you. Ennis, the first set of lights, the first chance to go rounds.",
+      "You roll into Ennis with a full cooler and a hopeful engine. The staging lanes look longer in person. They always do.",
+      "Texas Motorplex. A wide track, a wider sky, and a tech line that moves like a suggestion. The season is no longer theoretical.",
+    ],
+    "arr:Gulf Coast Dragway, Houston": [
+      "Gulf Coast Dragway. The air is thick enough to chew. The shutdown area shimmers. Houston has opinions about humidity and horsepower.",
+      "Houston. Hot, heavy, and already lined up. You claim a pit and immediately start a discussion about jetting, or feelings, or both.",
+      "The Gulf Coast strip is honest about the weather. It is sticky. The car will be too, until it is not, at speed.",
+      "You arrive in Houston to the sound of someone else's qualifier and the smell of race gas and fried something. Home enough.",
+      "A coastal dragway with a packed pit lane. The forecast is 'more of this.' The team peels off hoodies and gets to work.",
+      "Houston's strip, a breeze that is not a breeze, and a racers' meeting that starts with 'y'all already know.'",
+    ],
+    "arr:Red River Strip, Oklahoma": [
+      "Red River Strip. Wind across the plains tries to unpack your canopy. The staging lane feels a mile long and perfectly flat.",
+      "Oklahoma. The horizon is a straight line with a Christmas tree in the middle. You park, chock, and listen to the wind invent stories.",
+      "The Red River track is dry, fast, and a little lonely until the field fills in. Then it is a town.",
+      "You roll in under a sky that could go either way. The Oklahoma strip does not care. It just sits there, ready.",
+      "A prairie dragway, a helpful official, and a pit with enough room to think. The team likes the room. The car likes the air, maybe.",
+      "Red River. Dust devils in the overflow lot. A good place to find out if last week's tune was a truth or a rumor.",
+    ],
+    "arr:Gainesville Dragway, Florida": [
+      "Gainesville. Palms, humidity, and a crowd that knows a good light when it sees one. The long haul east is suddenly worth it.",
+      "Florida. The air is a wet blanket with tickets. The track is famous in the way a strip can be: by being fast, and by being here.",
+      "You arrive sun-dazed and a little proud of the mileage. Gainesville's pits are a maze of serious people in unserious hats.",
+      "The Florida strip is already singing. Someone in the stands claps for a burnout that is still in the water box. You get it.",
+      "Gainesville Dragway, after too many days in the hauler. The team spills out like a band that still likes each other, mostly.",
+      "A green, loud place. The tech inspector has seen every kind of car and is still interested in yours. That is a compliment.",
+    ],
+    "arr:Sandhills Motorpark, Carolinas": [
+      "Sandhills Motorpark. Pine pollen on the slicks and sweet tea in the pits. The Carolinas are unreasonably pretty about a racetrack.",
+      "The Sandhills strip sits in the pines like a secret that everyone knows. You sweep pollen off the wing and call it a pre-flight.",
+      "Carolina air, a polite official, and a shutdown area lined with trees that have heard some things.",
+      "You arrive to a potluck energy in the pits. Someone offers a plate. You offer a sticker. This is diplomacy.",
+      "Sandhills. The surface looks hooked-up already. {name} kneels and nods at the track like it can hear.",
+      "A regional park with national feelings. The Christmas tree is clean. The team is slightly allergic and very ready.",
+    ],
+    "arr:Thunder Valley, Bristol": [
+      "Thunder Valley. The hills hold the noise and throw it back. Bristol is a bowl of sound with a strip at the bottom, almost.",
+      "You drop into Thunder Valley and the hauler's radio becomes unnecessary. The place is already a headline.",
+      "Bristol. Steep parking, steep feelings, a track with a nickname it deserves. The team talks quieter, then louder.",
+      "The valley throws an echo at your burnout before you have even made one. You park, look up, and grin like a tourist, briefly.",
+      "Thunder Valley is packed. The lights look closer. The crowd looks closer. Everything is closer, including the next round.",
+      "You arrive in the hills with a tired hauler and a fresh respect for geography. The strip is waiting, loud even empty.",
+    ],
+    "arr:Mid-America Dragway, Illinois": [
+      "Mid-America Dragway. A last tune-up before the Big Go. The field is paying attention, and so are you.",
+      "Illinois. Flat, focused, and full of haulers that look like they have a plan. You have one too, written on a dirty notecard.",
+      "The Mid-America strip is a rehearsal that counts. Points are tight, or they feel tight, which is the same in the stomach.",
+      "You roll in knowing Indianapolis is close enough to taste. This track will not be a formality if you can help it.",
+      "A practical Midwestern welcome: good ice, good lanes, a racers' meeting that starts on time. {name} almost cries, professionally.",
+      "Mid-America. The car gets a once-over that is really a twice-over. The Big Go is next. This is not a rest stop, it is a test.",
+    ],
+    "arr:The Big Go, Indianapolis": [
+      "The Big Go, Indianapolis. The finale. Points, pride, and a shutdown area as wide as a rumor. The season has a last page.",
+      "Indianapolis. The lot is a city. The tree is the same as every other tree and also not. You have arrived at the Big Go.",
+      "The Big Go does not need a speech, but the team gives you one anyway. You nod. You check the chutes again.",
+      "Finale weekend. Stickers everywhere, including on people. Your pit is a rectangle of everything you still have left.",
+      "You park at the Big Go and sit for a minute in the hauler, just a minute, before the season becomes a set of lights again.",
+      "Indianapolis, the last lights of the year. Whatever the points say, you still have to run the car. That, at least, is simple.",
+    ],
+    techPass: [
+      "Tech inspection is a conversation about bolts, then a sticker, then a nod. You are in.",
+      "The inspector looks at the chute, the lights, the cage, and your face. All four pass. Sticker on.",
+      "Tech is brief and thorough. A tape measure, a joke, a pass. The car is legal enough to be quick.",
+      "You roll through tech like a person who packed the rulebook and also read it. Sticker. Smile. Pits.",
+      "A long look at the trans blanket, a short look at the paperwork. You pass. {name} exhales like a leak.",
+      "Tech says you are good. The sticker is already curling in the heat. That is a good sign, somehow.",
+      "The official has seen worse, and says so, kindly. You are through tech and into the event.",
+    ],
+    techIssue: [
+      "Tech finds a loose {item}. You fix it in the line, lose a little pride, and still get the sticker.",
+      "A missing safety wire becomes a twenty-minute play. You pass, eventually, looking obedient.",
+      "The inspector wants a tighter {item}. Fair. You tighten. The sticker arrives like a pardon.",
+      "Tech almost sends you back for a {item} that was 'not like the drawing.' You produce a better drawing, and a better {item}.",
+      "A small tech issue, a small fix, a still-good morning. The car is legal and slightly more fastened.",
+      "You fail, briefly, for a {item} that was hiding. You find it, show it, and pass on the second smile.",
+    ],
+    entryPaid: [
+      "You pay the entry, {n}. The clerk wishes you a good light and means it the way clerks do, which is enough.",
+      "Entry fee: {n}. The envelope is in. The event is no longer a maybe.",
+      "You slide {n} across and get a number, a handshake, and a map of the pits you will not follow.",
+      "The entry is paid ({n}). Someone writes your name like it is already on a ladder. You like that.",
+      "{n} poorer, one event richer in possibility. The team hangs the number on the hauler like a flag.",
+      "You buy your way into the show for {n}. Standard, necessary, a little thrilling every time.",
+    ],
+    cantAfford: [
+      "The entry is {n}. The budget shakes its head. You cannot buy a set of lights today.",
+      "You do the math out loud, which does not make it cheaper. The fee is {n}. Not today.",
+      "The clerk is kind, and also not a bank. You cannot afford the {n} entry. The pits suddenly look like a museum.",
+      "Short of the entry fee ({n}). You can watch, or you can go hunt a part to sell, or you can admit this one is a bye you did not want.",
+      "The number is the number: {n}. Your cash is a smaller number. You look at the other options, which are few.",
+      "You cannot pay the {n} entry. The season does not pause, exactly, but this weekend might.",
+    ],
+    qualifyGood: [
+      "A clean pass. ET {et} at {mph} mph, reaction {rt}. The slip is already slightly damp from a proud thumb.",
+      "You lay down {et} at {mph}, RT {rt}. The crew tries not to dance. They do a small dance.",
+      "The car goes straight and honest: {et} / {mph} mph, light {rt}. Qualifying has a number now, a good one.",
+      "A tidy run. {et} at {mph} mph. The tree saw a {rt}. {name} nods once, the highest praise.",
+      "You come back to the pits with {et} at {mph} and a {rt} light. Someone writes it on the board like it might fade.",
+      "Good pass. {et} e.t., {mph} mph, {rt} on the tree. The lane was kind. You were kinder.",
+    ],
+    qualifyBad: [
+      "A messy pass: {et} at {mph} mph, RT {rt}. The car was unhappy, or you were, or the air was. You have another shot, maybe.",
+      "You get down there in {et} at {mph}, but it felt longer. Light {rt}. The data is a shrug.",
+      "Not the pass you wanted. {et} / {mph} mph, {rt} RT. The team is already talking about 'the next one.'",
+      "A sloppy run that still counts: {et} at {mph}, {rt} on the tree. Pride files a complaint. The sheet does not.",
+      "The car hunts a little and posts {et} at {mph} mph. Reaction {rt}. You park it and think quiet thoughts.",
+      "A qualifying pass with room for improvement, which is a polite way to say {et} at {mph}, RT {rt}.",
+    ],
+    qualifyRed: [
+      "Red light. {rt}. The tree is honest, and so is the slip, which has a very short story: no time.",
+      "You leave too early. A red bulb, a {rt}, a quiet return to the pits. Qualifying does not take the run.",
+      "Foul start. The ambers were a lullaby and you believed them. {rt} red. No e.t. this pass.",
+      "A red light so slight it is almost philosophy, except the tree does not do philosophy. {rt}. No time.",
+      "You red-light the qualifier ({rt}). {name} looks at the tree like it might recant. It does not.",
+      "Early. Red. {rt}. The shutdown area is long enough for a lecture you give yourself, privately.",
+    ],
+    qualifyBroke: [
+      "The pass ends early in a cloud of 'not today.' You limp back. Qualifying will have to live with what you already have, if anything.",
+      "A parts failure on the qualifying pass. The e.t. is a rumor. The repair bill is not.",
+      "You shut it off on the way up, which is wisdom, and also a missed slip. The crew is already opening the hood.",
+      "A bad noise, a worse instinct, a lifted pedal. No number this run, except the number of worried faces: all of them.",
+      "The car tells you no mid-track. You listen. Qualifying is a maybe; the engine is a priority.",
+      "A qualifying attempt that becomes a maintenance event. The tree, unbothered, is already lighting someone else.",
+    ],
+    elimIntro: [
+      "Eliminations. You are in, {seed} seed, against {rival}. The ladder is a simple machine with loud feelings.",
+      "The field is set. You drew {rival}, which is a name with a reputation and a reaction time. Round time.",
+      "Pairings are up. {rival} in the other lane. You are the {seed} seed, which is a number and also a mood.",
+      "The ladder says you and {rival}. {name} says 'easy,' which is a lie you appreciate anyway.",
+      "Eliminations, first (or next) look: {rival}. Your best of the day vs theirs. The tree does not care about either.",
+      "You are on the ladder, {seed} seed, next to {rival}. Time to pick a tune and a light.",
+    ],
+    tuneAsk: [
+      "The lanes are close. How do you want the car against {rival}?",
+      "Tune call. {rival} is staging their nerves, probably, same as you. Safe, aggressive, or all-in?",
+      "You can baby it, run the usual, or ask the car for a favor it may not want to grant. {rival} waits, invisibly.",
+      "A tune for this round. The air, the track, and {rival} are all data. Your gut is also data.",
+      "Pick a personality for the car, for {rival}, for this tree. Safe, aggressive, all-in.",
+      "The crew looks at you. This is why you are the racer. Tune it for {rival}.",
+    ],
+    restDays: [
+      "The team rested {days}. The wrenches sleep. So do the people who hold them.",
+      "You take {days} in the pits, which is not the same as a vacation, but the coffee is slower, and that helps.",
+      "A pause of {days}. The car ticks as it cools. Morale does a small, cautious stretch.",
+      "Rested {days}. Someone finally sleeps who is not also holding a flashlight.",
+      "You camp in the pit for {days} and do nothing heroic, which is the point. The team looks like people again.",
+      "A {days} rest. Even the generator takes a nap. The season will still be there in the morning.",
+    ],
+    outOfFood: [
+      "The cooler is a philosophical concept now. It is empty. The team looks at you like a setup sheet with no numbers.",
+      "You are out of food. The next conversation is going to be about this, at length, and also soon.",
+      "No meals remain. A very old kind of problem arrives in a very modern pit.",
+      "The last sandwich is a memory. {name} opens the cooler as if more might have spawned. They have not.",
+      "Out of food. The snack situation is now the crew-chief situation. Something has to be done, or someone will wilt.",
+      "The cooler echoes. You have gone broke on meals, which is a humble way to get in trouble.",
+    ],
+    outOfFuel: [
+      "The fuel cans are empty. The hauler, and the car, have opinions about that, all of them poor.",
+      "You are out of {fuel}. The next miles, and the next pass, are theoretical.",
+      "No fuel left. A gas-station run is no longer a suggestion. It is the plot.",
+      "The last can was the last can. {name} holds it upside down, as if gravity will become a sponsor.",
+      "Out of fuel. The season runs on liquid, it turns out, not just hope.",
+      "Empty cans, a long face, a need for {fuel} before anything else is clever.",
+    ],
+    cantRaceSupplies: [
+      "You cannot make a pass like this — not enough fuel or slicks. The lanes do not take IOUs.",
+      "The car is willing. The supplies are not. You need fuel and slicks to be a racer today, not a spectator with a fancy chair.",
+      "Short on consumables. A pass without {need} is a wish, and the tree does not grant wishes.",
+      "You are not ready for the lanes. The crew knows it, the car would know it, and the official would definitely know it.",
+      "No run. Not like this. Shop, scrounge, or skip — those are the doors.",
+      "The setup is a car without its shoes, or without its lunch. You cannot stage on empty.",
+    ],
+    raceWinClean: [
+      "You take it. ET {et} at {mph} mph, RT {rt}. {rival} runs {oet} at {omph}, RT {ort}. Margin: {margin}. The handshake in the pits is easy.",
+      "A clean win. Your {et} / {rt} package beats {rival}'s {oet} / {ort}. {mph} mph, and a crew that remembers to breathe.",
+      "Straight, green, gone. You win it, {et} at {mph} mph (RT {rt}) over {rival} ({oet}, {ort}). Margin {margin}.",
+      "The better pass wins, and it is yours: {et} at {mph}, light {rt}. {rival} is close enough to be polite ({oet}, {ort}).",
+      "You go rounds. {et} e.t., {mph} mph, {rt} RT. {rival} posts {oet} / {ort}. The win light is on your side, which is the idea.",
+      "No drama, just a number: you, {et} at {mph} and {rt}, ahead of {rival} by {margin}. Someone writes it down like history.",
+      "A professional win, if a drag race can be professional. {et} / {mph} / {rt} vs {rival}'s {oet} / {ort}. Onward.",
+      "You win it on the scoreboard and also in the stomach. {et} at {mph} mph, RT {rt}. {rival} was real ({oet}, {ort}). You were righter.",
+    ],
+    raceLossClean: [
+      "You lose a clean one. {et} at {mph} mph, RT {rt}, against {rival}'s {oet} at {omph}, {ort}. Margin {margin}. Hats off, genuinely.",
+      "A straight-up loss. Their package ({oet} / {ort}) beats yours ({et} / {rt}). {rival} is kind about it. You are, too, after a second.",
+      "The other lane is better today. {rival} {oet} at {omph}, you {et} at {mph}, lights {ort} vs {rt}. Out, for now.",
+      "You bring {et} at {mph} and a {rt} light, and it is not enough. {rival} runs {oet} / {ort}. The season continues, if the car does.",
+      "A good pass that loses to a better one. You: {et}, {rt}. Them: {oet}, {ort}. Margin {margin}. No one to blame but the math.",
+      "Eliminated, fairly. {rival} is first to the other end in the ways that count. Your slip still looks like a pass. It just isn't a win.",
+      "Close enough to sting: you {et} / {rt}, {rival} {oet} / {ort}. The win light is over there. You drive back in a straight, thoughtful line.",
+      "A loss with no asterisks. {et} at {mph} mph, RT {rt}. {rival} needed {oet} and {ort}, and they had them.",
+    ],
+    holeshotWin: [
+      "Holeshot! Your {rt} light outs {rival}'s {ort}, and even with a {et} against their {oet}, the package is yours. The crowd makes a small, knowing noise.",
+      "You leave first and stay first, barely. RT {rt} vs {ort}. They have the quicker e.t. ({oet} to your {et}) and still lose the race. Holeshot city.",
+      "A holeshot win. The tree liked you ({rt}) more than it liked {rival} ({ort}). E.T. said otherwise ({et} vs {oet}). The win light speaks last.",
+      "You steal it at the tree. {rt} to their {ort}. {rival} is faster at the top end ({oet}) and second at the finish. Sports, baby.",
+      "Holeshot. The reaction ({rt}) is a tiny masterpiece. The e.t. ({et}) is only fine. Fine plus a masterpiece beats {rival}'s {oet} / {ort}.",
+      "They have the better car today, maybe. You have the better light ({rt} vs {ort}). The stripe agrees with you. {rival} nods, annoyed and respectful.",
+      "A jump, a hold, a holeshot. {rt} vs {ort}, {et} vs {oet}. The margin is {margin} and all of it was born at the tree.",
+      "You win it on the bulb. {rt} to {ort}. {rival} runs you down almost, {oet} to your {et}, and almost is the whole story.",
+      "The package is a reaction-time story: you {rt} and {et}, them {ort} and {oet}. Holeshot win. {name} pretends they expected it.",
+      "Green, first, barely hung on. Holeshot over {rival}. Numbers: you {et}/{rt}, them {oet}/{ort}. The crew invents a new high five.",
+    ],
+    holeshotLoss: [
+      "You have the quicker car ({et} to {oet}) and lose it at the tree. Their {ort} outs your {rt}. A holeshot loss. The quiet is educational.",
+      "Holeshot, other lane. {rival} leaves on a {ort}; you leave on a {rt} that felt fine and was not fine enough. Your {et} cannot catch their jump.",
+      "They steal it at the bulb. You run {et} at {mph} and still watch a win light you do not own. {ort} vs {rt}. Ouch, in a sports way.",
+      "A textbook holeshot loss. Faster e.t. ({et} vs {oet}), worse light ({rt} vs {ort}), second place. The tree is a jealous god.",
+      "You almost sleep, or anyway you blink. {rt} to their {ort}. The car is quick ({et}) and second. {rival} knows what they did.",
+      "Left behind at the tree, you chase like a story problem. The story problem wins for {rival}. {et} / {rt} vs {oet} / {ort}.",
+      "The better pass is yours. The better package is not. Holeshot loss, {rt} against {ort}, {et} wasted in the kindest sense.",
+      "You get had at the lights. {rival}'s {ort} to your {rt}. Even your {et} cannot buy it back. Hats off, through slightly gritted teeth.",
+    ],
+    redlight: [
+      "Red light. {rt}. The round ends at the first bulb. {rival} gets the automatic, and a wave you return, eventually.",
+      "You leave a hair early. The red is undeniable ({rt}). Foul start, loss, a very sincere conversation with yourself in the shutdown area.",
+      "A red bulb so slight it could be a rumor, but the tree is not in the rumor business. {rt}. {rival} goes through, unopposed in the ways that matter.",
+      "Foul. {rt}. The ambers hypnotized you. {name} looks at the tree, then at you, then at the tree, then decides to be kind.",
+      "You red-light the round ({rt}). The car was ready. The driver was early. That is the whole post-race debrief.",
+      "Early. Red. {rt}. {rival} does not even have to be quick, though they may have been. You will not know, exactly, and it will bother you.",
+      "The worst number on a slip is a minus at the front of the reaction. {rt}. You are out, fairly, infuriatingly, redly.",
+      "A deep red or a shallow red — it is still a red ({rt}). The win light is already bored of you. Next time, later. A little later.",
+      "You go red against {rival}. {rt}. No package time, no argument, no replay that will help. Just the walk back.",
+      "Red light, {rt}, and the sound of a good plan arriving too soon. {rival} is your polite executioner.",
+    ],
+    oppRed: [
+      "{rival} red-lights ({ort})! You get the automatic, even though your pass was just a pass ({et} at {mph}, RT {rt}). Kind of the tree, kind of not, for them.",
+      "The other lane leaves early. Red for {rival} ({ort}). You are still green ({rt}) and suddenly through. You try not to look relieved. You fail, slightly.",
+      "Gift red. {rival} goes too soon. You take the win you did not entirely author, with a {et} at {mph} and a clean {rt}.",
+      "Their bulb is red ({ort}). Yours is not ({rt}). That is a win. You still drive it out, because professionalism, and also superstition.",
+      "{rival} fouls. You advance. The crew is too sportsmanlike to cheer loudly, and then they cheer loudly.",
+      "An opponent's red light is a strange joy: yours, but also a little sad. {ort} for them, {rt} and {et} for you, and a spot in the next round.",
+      "They jump. You don't. The win light is a formality. You nod at {rival} in the way people do when the tree has been cruel and correct.",
+      "Foul in the other lane. You go rounds on a technicality that is also the rule. {et} at {mph}, RT {rt}. I'll take it, you do not say, except you do.",
+    ],
+    tireShake: [
+      "Tire shake! The car writes a jagged signature down the lane. You still get there: {et} at {mph}, RT {rt}, but it cost you. {rival} is the other half of the story.",
+      "The slicks chatter like they have news. The news is a slower {et} at {mph}. Light was {rt}. The chassis will want a meeting.",
+      "Shake early, recover late. {et} / {mph} / {rt}. The steering wheel was a conversation you did not schedule.",
+      "A violent little shimmy, cartoonish and rude. You keep it in the groove and post {et} at {mph}, RT {rt}. Not the number you wanted.",
+      "Tire shake turns the first sixty into percussion. The slip still prints: {et} at {mph}, {rt} RT. The crew winces in 4/4 time.",
+      "The tires decline to be circles for a moment. You ride it out. {et} at {mph}. {name} is already talking about pressure, and feelings.",
+      "Shake, rattle, and a {et} that could have been better. {mph} mph, RT {rt}. The lane was hooked up, the car was briefly unhooked.",
+      "You light the tires in the wrong way: not smoke, shake. The number comes back ugly-honest: {et} at {mph}, {rt}.",
+    ],
+    smokedTires: [
+      "You smoke the tires and watch the race become a cloud. A big, silly haze, a bad number ({et} at {mph}), and a lesson about leaving too hard.",
+      "The slicks go up in a cartoon puff. The tree was fine ({rt}); the track, from the tires' point of view, was ice. {et} is a tourist number.",
+      "Wheelspin, then more wheelspin, then a view of {rival} that is mostly their parachute. You crawl in at {et} / {mph}.",
+      "You leave, and the tires decline to participate. Smoke, heat, a {et} that looks like a typo. RT {rt}, wasted on a cloud.",
+      "A burnout, unfortunately, mid-track. {et} at {mph}. The team can smell it before they can see it. So can the next county.",
+      "The car hazes the hides and goes fishing. You lift, you pedal, you post a {et} that will not go on a T-shirt. {rt} on the tree, for what it's worth.",
+      "Smoke the tires, lose the setup, keep the car straight, barely. {et} / {mph} / {rt}. {name} opens the water-box discussion early.",
+      "A lost-in-smoke pass. The Christmas tree is a memory; the cloud is the present. You arrive, eventually, in {et} at {mph}.",
+    ],
+    brokenPart: [
+      "A {part} lets go mid-track. You limp it out with a {et} at {mph}, RT {rt}, and a new item on the evening's agenda.",
+      "The car breaks a {part} in a way that is loud and, thankfully, not dramatic in any gory sense. Just expensive. The slip still prints: {et}.",
+      "Something mechanical resigns. The {part}, specifically. You get down there in {et} at {mph} and already know the pits will be a clinic.",
+      "A bang, a warning light, a professional lift. Or maybe you don't lift, and the {part} files the paperwork anyway. {et} at {mph}, RT {rt}.",
+      "You finish the pass with a {part} that has become a souvenir. {et} / {mph} / {rt}. The spare hook looks suddenly important.",
+      "Mechanical trouble: the {part}. The run is a {et} at {mph}. The repair is the rest of the afternoon, if you have the bit.",
+      "Mid-track, the {part} announces retirement. You steer it straight, post {et}, and inventory the box.",
+      "A broken {part} turns a race into a retrieval. You still get a number ({et} at {mph}, {rt}), and a bill, of a kind.",
+    ],
+    engineBlow: [
+      "The engine expires in a cartoon cloud of smoke and opinion. No gore, plenty of theater. The pass is over. The car is very, very quiet after.",
+      "A blow-up, in the Saturday-morning-cartoon sense: smoke, a pop, a long coast, a crew that is already running. The engine is, for now, a former engine.",
+      "You lift because the motor has started telling a story you do not want the ending to. Smoke. A shutdown-area tour. Silence.",
+      "Engine trouble with a capital E. A cloud, a wince, a car that will not be going rounds until a lot of work (or ever, if the damage is honest enough).",
+      "The motor grenades itself in a polite, enclosed, movie way. Bits stay inside the blanket, mostly. The race does not stay with you.",
+      "A bang, a haze, a very sincere 'oh.' The engine is done being an engine for the moment. {name} arrives with an extinguisher and a face.",
+      "Smoke out of places smoke should not, then a coast, then a tow. The blow-up is cartoonish and still expensive. The round is gone.",
+      "The car writes a retirement letter at half-track, in smoke. You steer it straight, which is the last good decision of the pass.",
+      "A spectacular, non-gory mechanical ending. The crowd makes a noise. You make a smaller one. The engine is a project now, or a memory.",
+      "Pop, smoke, coast. The engine blow-up is the whole plot. There is no e.t. worth the paper, and the hood will be open a long time.",
+    ],
+    centerline: [
+      "You drift, you correct, you still kiss the centerline. DQ. The official is apologetic and firm. {rival} goes through.",
+      "The car takes a tourist path toward the middle. You are crossing the centerline, and then you are out. A disqualification, clean and painful.",
+      "Centerline. The stripe is not a suggestion. Your {et} at {mph} would have been a story. Instead, it is a DQ, RT {rt} notwithstanding.",
+      "A wander, a warning, a DQ. You kept it safe and not quite in your lane. {rival} gets the win they only had to watch.",
+      "You hop the line in a way that would be funny if it were a drawing. It is not a drawing. Disqualified. The shutdown area is long.",
+      "DQ, centerline. The car was fast and nosy. The official points, kindly, at a rule you also agree with, in the abstract.",
+      "The groove ended, in your opinion, slightly left. The rulebook disagrees. Centerline DQ. {rt} and {et} are trivia now.",
+      "You paint a little of the other lane. That is enough. Out, DQ, a wave to {rival}, a lecture to the steering wheel.",
+    ],
+    chuteFail: [
+      "You win the pass — {et} at {mph}, RT {rt} — and then the parachute files a non-participation form. You tour the shutdown area like an uninvited guest. The car stays straight, somehow.",
+      "Chute fail at the top end. The pass was {et} at {mph}. The rest is a cartoon of brakes, gravel, and a very sincere 'whoa.' No one is hurt. The fence is slightly more interesting.",
+      "The parachute becomes a decorative bag. You stand on everything and skip the sand trap, mostly. A story, a scare, a {et} that is already history.",
+      "No chute. Plenty of shutdown. You and the car take the scenic route past the first turnoff. {name} is already inventorying spare packs.",
+      "The pack pops out and declines to bloom. You do some of the finest braking of your life. The pass number ({et} at {mph}) feels very secondary.",
+      "Parachute fail, cartoon-grade: a flop, a slide, a straight-ish stop, a huge silence, then a huge noise from the crew. Everyone is okay.",
+      "At the big end the chute takes the day off. You do not. Brakes, luck, and a wide area do the job. The car is rattled. So are you, a bit.",
+      "A failed chute turns the finish into a travelogue of the shutdown. You park it, eventually, and count heads, tires, and remaining luck.",
+      "The chute does not, and then you do — a lot of braking. Safe, somehow. The official has a clipboard and a sympathetic mouth.",
+      "Parachute? Merely an idea. You go exploring past the finish at {mph} mph feelings, then slower, then stopped. No gore, plenty of later conversation.",
+    ],
+    dnq: [
+      "You do not qualify. The field is eight and you are ninth, or worse, or broken. The weekend, as a racer, is over. As a traveler, it is not.",
+      "DNQ. The bumps were too tall, or the passes were too few, or the car was too honest about its condition. You watch first round from the fence.",
+      "The ladder does not have your name. Qualifying is a door that closed. The team packs quieter than usual.",
+      "You miss the show on numbers. Tough. The points stay small. The road, tomorrow, is still the road.",
+      "Not in the eight. A DNQ at {track} is a bruise, not a funeral, unless the budget says otherwise. You nod at the field and step back.",
+      "The cut is cruel and also just a cut. You are on the wrong side of it. {name} already has the atlas out, which is either hope or coping.",
+    ],
+    infect: [
+      "{name} has {illness}.",
+      "{name} comes down with {illness}. The pits get a little quieter.",
+      "{name} reports {illness}, as if it were a failed qualifying pass, which it also is.",
+      "It is {illness} for {name}. They try to joke about it. The joke is small.",
+      "{name} has {illness}. You add it to the list, which is not a good list.",
+      "{name} catches {illness} between sessions. The next session will not cure it.",
+      "A diagnosis, informal but convincing: {name} has {illness}.",
+      "{name} is officially out with {illness}. The pit's vibe changes.",
+    ],
+    recover: [
+      "{name} is recovering from {illness}.",
+      "{name} comes back from {illness}, blinking like a person who has returned from a bad motel blanket.",
+      "{name} is on the mend from {illness}. They request a sandwich and a weaker generator.",
+      "The {illness} loosens its grip. {name} sits up and criticizes a jet, which is how you know they are better.",
+      "{name} shakes off {illness}, mostly. There is color in their face again.",
+      "Recovery: {name} is done with {illness}, or at least arguing with it successfully.",
+      "{name} returns from {illness} with a story and a slightly hoarse laugh.",
+    ],
+    quit: [
+      "{name} hangs it up. A quieter pit, an extra chair. They wish you a good light, and they mean it.",
+      "{name} leaves the team at a gas station that also sells hats. The goodbye is short and kind.",
+      "You shake hands. {name} is gone. The toolbox has a gap where their habits used to be.",
+      "{name} takes a job that includes a roof and a Saturday. You do not blame them, much.",
+      "{name} hops out at a rest area and does not hop back in. The company is lighter, and not in a good way.",
+      "{name} quits, gently, with a speech about 'timing' and 'the back.' You watch the dust settle.",
+    ],
+    epitaph: [
+      "{name}, {role} of {team}. Hung it up after {why}. {date}.",
+      "{name} ({role}) is done for the season: {why}. {date}. The chair in the pit stays empty, on principle.",
+      "In memory of a season-ending exit: {name}, {role} at {team}, out because of {why}. {date}.",
+      "{name}, {role}. Out after {why}. {date}. The radio is quieter, which is worse.",
+      "{name} of {team} is gone from the crew — {why}. {date}. A good culture, a thinner bench.",
+      "{name}, beloved {role}, is out with {why}. {date}. We will not be taking questions, except later, maybe.",
+      "R.I.P. to this chapter: {name}, {role}, sidelined by {why}. {date}. The group chat is silent for a whole hour.",
+      "{name}, {role} of {team}. {why} ended the road for them. {date}.",
+    ],
+    outLog: [
+      "{name} is out of the season ({why}).",
+      "{name} is out because of {why}. The hauler is too quiet.",
+      "{name} is done for now: {why}. You update the roster with a pencil, because a laptop feels wrong.",
+      "{name} leaves the season via {why}. Someone closes a toolbox that was not theirs.",
+      "{name} is out ({why}). The road does not slow down, which is rude of it.",
+      "{name} is sidelined by {why}. A sticky note on the dash becomes a memorial for a few miles.",
+      "{name} is gone from the crew — {why}. You had a plan. The plan did not include this.",
+      "{name} is out with {why}. The Big Go suddenly looks like a very small thing, and also the only thing left.",
+    ],
+    talkIll: [
+      "{name} is fighting {illness}.",
+      "{name} is curled around {illness} and a team hoodie like it is a setup.",
+      "{name} has {illness} and would like the generator, in general, to be lower.",
+      "{name}, mid-{illness}, gives a thumbs-up that convinces no one.",
+    ],
+    talkWorn: [
+      "{name} looks worn through.",
+      "{name} has the face of a person who has read one too many timing slips.",
+      "{name} is vertical, technically.",
+      "{name} looks like a Christmas tree stuck on amber.",
+    ],
+    talkHungry: [
+      "{name} is worrying about the cooler.",
+      "{name} does a meal census out loud. The numbers are not comforting.",
+      "{name} keeps opening the lid as if more sandwiches might have spawned.",
+      "{name} mentions lunch in a way that is not really about lunch.",
+    ],
+    talkRacer: [
+      "{name} stares down the strip and talks about a perfect light.",
+      "{name} practices the leave, without the car, which looks a little silly and also correct.",
+      "{name}, racer-faced, watches the tree like it owes them a package.",
+      "{name} talks about the Big Go as if it can hear.",
+    ],
+    talkChief: [
+      "{name} is checking the list, the list on the list, and the fuel jugs.",
+      "{name} has a mental spreadsheet and is updating it with glances.",
+      "{name} pats the car like a horse, then checks the chute pack twice.",
+      "{name} is a crew chief in a sun-faded hat: calm, counting, slightly haunted by a weather station.",
+    ],
+    talkTuner: [
+      "{name} is staring at a weather meter like it is a child.",
+      "{name} has a laptop, a note, and a disagreement with last pass.",
+      "{name} says 'the air changed' in a tone that is not superstition, exactly.",
+      "{name} would like one more pass in the simulator, which is their head.",
+    ],
+    talkMech: [
+      "{name} is under the car, having a quiet word with a bolt.",
+      "{name} has grease on a cheek and a confidence you borrow.",
+      "{name} cocks a head at a noise no one else heard, then nods: it is fine, or it will be.",
+      "{name} is inventorying spares and humming a song that is probably about torque.",
+    ],
+    eventWin: [
+      "You win {track}! Purse {purse}. The team does a dance that should be illegal in some counties and is required in this one.",
+      "Event win at {track}. {purse} in the box, a trophy that is really a plaque, and a points bump that likes you.",
+      "The last win light of the weekend is yours. {track} belongs, briefly, to {team}. Purse: {purse}.",
+      "You take the event at {track}. Someone pours a drink on a slicks tire, ceremonially. {purse} also happens, more usefully.",
+      "Champions of the weekend, if not yet of the season. {track}, {purse}, a photo that will live on the hauler door.",
+      "A whole event, won. {track}. The purse is {purse}. The feeling is slightly larger.",
+      "You go every round and then one more. {track} is in the book as a W. {purse} follows, politely.",
+    ],
+    eventRunner: [
+      "Runner-up at {track}. Half a purse ({purse}) and a full afternoon of almost. That is still a day worth having.",
+      "You finish second at {track}. {purse}. The winner is kind. You are almost kind, then you are kind.",
+      "The final did not go your way. {track} still paid {purse} for the trouble, and the points are not nothing.",
+      "Runner-up. A good looking slip, a better looking opponent, a {purse} check. You pack like a professional.",
+      "Second at {track}. You were one light, or one part, or one blink away. {purse} eases the math, not the feeling.",
+      "A final-round loss and a runner-up check ({purse}) at {track}. The season is still in it.",
+    ],
+    eventOut: [
+      "You go out at {track} before the end. A few points, a few lessons, a packed hauler. The next strip is still on the map.",
+      "The ladder ends early for you at {track}. No shame, some scratches, a road east or north still waiting.",
+      "Eliminated at {track} in a way that will make a good story if you let it. The team is already talking about the next entry.",
+      "Not your weekend, mostly. {track} files you under 'also ran' and also 'still running the season.' That second one matters.",
+      "Out, not down. {track} is a line in the recap, not the last line. You fuel the hauler and mean it.",
+      "The event is over for {team} at {track}. You leave with the car, the crew, and a need to be better at a tree, or a trans, or both.",
+    ],
+    treeSportsman: [
+      "Sportsman tree. Ambers down the lane, one, two, three — then green. Tap GO when it is green, and not a rumor of green.",
+      "A sportsman tree will count the ambers down. Leave on green. Early is red, and red is a short weekend.",
+      "Watch the staggered ambers. The green is the whole job. Your finger, or your thumb, is the racer now.",
+      "Sportsman Christmas tree: patience, then more patience, then a very small, very important hurry.",
+      "The lights will walk down. You will wait. You will go on green. That is the whole religion.",
+      "Staged. The sportsman tree is about to tell a slow story with a fast ending. Be later than your fear, earlier than your doubt.",
+    ],
+    treePro: [
+      "Pro tree. All three ambers together, then green in a hurry. Tap GO when it is green. There is less poetry, more panic, in a useful way.",
+      "A pro tree does not stroll. Ambers, then green, and your job is not to be early and not to be late, which is almost the same problem.",
+      "Pro tree: a handful of tenths to be a person. Watch it. Go on green. Do not invent a fourth amber.",
+      "The pro tree is a blink with rules. Stage, wait, smash GO on green, try not to bring a red into your life.",
+      "All three at once, then the one that matters. Pro tree. Your light will be a number you have to live with.",
+      "Staged on a pro tree. It will be abrupt. That is the kindness of it, and the cruelty.",
+    ],
+    standingsFlavor: [
+      "The points board is a rumor with math. You have {pts} points and a season that is still a verb.",
+      "Standings: you, {pts} points. The lead is {lead}. The Big Go will have opinions if you get there.",
+      "You check the board like a person checking a weather radio. {pts} points. It could be worse. It could be better.",
+      "{pts} on the season. {team} is in it, or near it, or proudly adjacent, depending on the font size of the leader.",
+      "Points: {pts}. The championship is a ladder you cannot see all of, except when you can, and then you stare.",
+      "A paper standings sheet, already smudged. Your name, {pts} points. Enough to keep packing.",
+    ],
+    winChamp: [
+      "THE BIG GO, and after it, the points. You are the champion of the circuit. {team} and {car} and a racer named {name} — that is the season, and it stuck.",
+      "Championship. The last slip of the year is only paper; the title is the thing. {team} takes the season. You park {car} like it might start talking.",
+      "You win the championship at Indianapolis, or anyway after Indianapolis, when the math sits down and agrees with you. {pts} points. The noisy kind of quiet follows.",
+      "Season champion. {name}, {car}, {team}. The Big Go is a blur and also a photograph. You did the rounds, and then you did the year.",
+      "The board has your name at the top and no asterisk. Championship, {pts} points, a crew that is suddenly shy, then not. {car} is a title-winner, which is a funny thing to call a machine.",
+      "You take the championship. Not a trophy tall enough for the miles, but a trophy anyway. {team} on the season. That was the job.",
+      "After the last shutdown, the points say you. Champion. {name} sits on a cooler and laughs once, which is the whole speech.",
+      "The circuit has a champion and it is you. {car} at the Big Go, {pts} on the year, a green-and-black kind of feeling, if feelings had a palette.",
+    ],
+    winChampClose: [
+      "A close one, on the board. You sneak the championship by a handful of points ({pts}). {team} will tell it as a landslide in ten years. Today it is a whisper and a grin.",
+      "Champion, barely. The math had to take off its shoes. {pts} points, a rival close enough to smell the methanol, and a title that still counts all the way.",
+      "You win the season in a photo-finish of paperwork. {pts}. No one in the pit cares that it was thin. Thin is still the top.",
+      "The championship is yours by a nose, as if the year were a package race. {pts} points. {car} is a nervous champion, and a real one.",
+      "Barely, thoroughly, champion. The standings needed a second look, then a handshake. {team} takes it. You exhale a year.",
+      "A tight points fight ends with your name first. {pts}. The Big Go did its job. So did a dozen ordinary Tuesdays in the hauler.",
+    ],
+    winChampSwept: [
+      "You didn't just win the championship. You made it look, if not easy, then at least intentional. {pts} points, a car that kept answering, a crew that never quite sat down.",
+      "A year of going rounds. The title is a formality you still need, and you have it. {team}, {car}, {pts} points, a season that will be annoying to follow.",
+      "Dominant, as the newspapers might say if they still sent anyone. Champion, {pts}, and a pile of event wins that looks like a typo.",
+      "You take the championship in a way that will make next year harder, because now there is a target. Today you do not care. {pts}.",
+      "A clean sweep of a season, almost. The title is yours, comfortably. {name} pretends this is normal. It is not.",
+      "The circuit was yours more days than it wasn't. Championship, {pts} points. Park it. Look at it. That is {car}, champion.",
+    ],
+    loseBroke: [
+      "The budget ends the season. There is no entry, no fuel, no room in the math. {team} is out, not with a bang, with a ledger.",
+      "You go broke on the circuit, which is an old story and still a bad one. {car} is quiet. The cooler is quiet. The year is over.",
+      "Out of runway, in the money sense. The next track is a rumor you cannot afford to test. Season over, {team} packing for home, wherever that is.",
+      "The cash hits a number that will not buy a green light. You are done. It is not dramatic, except to the people in the hauler, who are all of you.",
+      "Broke, in the racing way: not a dollar that will turn into a pass. {name} sits on a tire and does the math again. It does not improve.",
+      "The season runs out of money before it runs out of track. That is a loss, and a lesson, and a long drive that is not toward Indianapolis.",
+      "You cannot continue. The wallet has made the call. {team}'s year ends in a parking lot with a very honest silence.",
+    ],
+    loseCar: [
+      "The car is done — really done. {car} will not make another pass this year, not without a miracle shop you do not have. The season ends in a cloud that has already blown away.",
+      "A broken, unrepairable year. {car} is a project for another season, if there is one. Today it is a trailer full of what-ifs.",
+      "The machine ends the story. No car, no circuit. {team} is a crew without a purpose for the moment, which is a hard kind of unemployment.",
+      "You hang it up because the car has hung it up. A mechanical last chapter, cartoon-smoke still in the nose, no one hurt, everyone finished.",
+      "{car} is finished. So is the year. You put a hand on the bodywork and do not make a speech. The speech would have been 'thanks.'",
+      "Destroyed, as a race car, not as a rumor. The season cannot continue on a wish. You load what is left and point the hauler toward home.",
+      "The last mechanical event was one too many. {car} will not stage again this season. The championship is for people still in the lanes.",
+    ],
+    loseRacer: [
+      "The racer is out. Without a driver, {car} is a very nice paperweight. {team}'s season ends in a folding chair.",
+      "You cannot take a green light from a clinic, or a motel bed, or a 'doctor says no.' The year is over, because the racer is.",
+      "Season ending, driver-side. {team} packs the belts and the gloves and does not pack a plan B. There is no plan B.",
+      "The person who leaves on green is not leaving on green anymore this year. That ends it. {car} sits, polite and useless.",
+      "Out, as a racer. The crew would go, the car would go, but the tree would not have anyone to talk to. Season over.",
+      "A driver-ending, season-ending stop. {team} is suddenly a travel group. The Big Go will happen without you, in a city you can almost picture.",
+    ],
+    losePoints: [
+      "You finish the year and not at the top. The championship belongs to someone else. {pts} points is a good year that is not the year. You park {car} with respect anyway.",
+      "The Big Go ends, and the board does not have you first. A complete season, a missing title, a long quiet on the ride out of Indianapolis.",
+      "Not the champion. Still a finisher. {pts} points, a car that made it, a crew that made it. The almost is heavy and also honorable.",
+      "You go to the finale and come up short on the only number that was always going to be the number. {pts}. The title goes elsewhere. You clap, eventually.",
+      "A full season, a lost championship. That is a kind of loss that still has photographs, slips, and a hauler that knows every mile.",
+      "The circuit has a champion, and it is not {team}. You did the work. The math did the rest. {pts} points, and a handshake you mean.",
+      "End of the year, not end of the world, but end of this particular dream. {pts}. You load {car} and think about next season earlier than you meant to.",
+      "You come home from the Big Go with a lot of stories and no title. {pts} points. It will have to be enough for tonight. Tomorrow can be hungrier.",
+    ],
+    loseMid: [
+      "The season ends short of Indianapolis. The Big Go will happen without {team}. That is a strange sentence, and a true one.",
+      "You do not make the finale. The year stops early, as years sometimes do, on a shoulder or in a pit or in a ledger.",
+      "Mid-circuit, the story stops. Not the championship, not even the last chapter — just a closed book, two-thirds through.",
+      "You pack it in before the Big Go. The reasons are stacked and all of them are heavy. {team} turns off the generator for the last time this year.",
+      "A short season, in the end. Indianapolis stays a rumor. The lights you already ran will have to be the lights you remember.",
+      "Out, early. The map still has tracks on it that you will not see, not this year. That is the loss: the unrun ones.",
+    ],
+    crewQuitEvent: [
+      "A long season talk. {name} has had enough of the road, or the hours, or the last bad meal. They might stay. They might not.",
+      "{name} looks at the hauler like it is a decision. The road has been long. A quieter life has started writing letters.",
+      "A late-night 'we need to talk' from {name}. Not dramatic, just tired. The circuit asks a lot. Sometimes it asks too much.",
+      "{name} is close to hanging it up. You can talk them into one more track, maybe, or you can thank them now.",
+      "The life is not for everyone, and {name} is almost in the 'not' column. A conversation in the pit, under a bug-filled light.",
+      "{name} wants off at the next decent town. You can hear it before they say it. You still make them say it.",
+    ],
+    crewStay: [
+      "{name} stays. The {role} seat is still full.",
+      "{name} puts the hat back on. 'We finish this,' they say, like a person in a movie, except also in a pit.",
+      "{name} stays. The doubt is starred and forgotten. The next track is still the next track.",
+      "You talk {name} off the exit ramp. They stay. Someone queues a better radio station.",
+      "{name} laughs, once, and stays. The resignation speech is archived under 'later, which is never.'",
+    ],
+    repairUsedPart: [
+      "You spend a spare {part} and a few hours. The car accepts the swap, grudgingly, then normally.",
+      "A spare {part} goes in. The broken one comes out. A ritual as old as the pits, plus more beep-codes.",
+      "You use a {part} from the box. That is what the box is for. The car is a car again.",
+      "Spare {part} installed. {name} torques things in a little rhythm. You are back in business, almost.",
+      "The spare {part} was why you packed like a pessimist. Good. The car rolls, under its own opinions again.",
+    ],
+    shopIntroStart: [
+      "Eddie's Race Shop, Ennis. Slicks, fuel, parts, chutes, food. Buy what the season will eat. Leave too light and the first broken thing is the end.",
+      "The shop is a cave of useful objects. Your wallet is a season ticket if you spend it right, and a trap if you don't.",
+      "Load the hauler here, in Ennis, while the prices are still kind. The track shops down the road will not be.",
+      "Eddie has seen every class of optimism. He will sell you slicks and not a single guarantee. Fair. Stock up.",
+      "The season starts at the counter. Fuel, tires, a trans if you are wise, food if you are kinder than you are hungry later.",
+      "A shop at the start of everything. The car is empty in the ways that matter. The shelves are not. Yet.",
+    ],
+    shopIntroTrack: [
+      "The track shop is smaller and prouder of its prices. You may still need what they have.",
+      "A pit-side counter, a markup, a necessary evil with a friendly face. Restock if the wallet can.",
+      "Event prices, event needs. The shop will not haggle much. The car might insist anyway.",
+      "You can buy what you forgot, at a premium that feels personal. It is not personal. It is the circuit.",
+      "A short inventory at a long price. Still: better a high-priced slick than a pass you cannot make.",
+      "The trailer-shop is open. Your cash and your needs have a meeting. You referee.",
+    ],
+  };
+
+  function newParty(racer, names) {
+    const party = [{ name: racer, role: "Racer", health: 5, illness: null, lastIllness: null, daysIll: 0, buried: false }];
+    for (let i = 0; i < ROLES.length; i++) {
+      party.push({ name: names[i] || DEFAULT_NAMES[i], role: ROLES[i], health: 5, illness: null, lastIllness: null, daysIll: 0, buried: false });
+    }
+    return party;
+  }
+  function newRivals() {
+    return RIVAL_NAMES.map(n => ({ name: n, points: 0, wins: 0, losses: 0, eventsWon: 0 }));
+  }
+  function newGame(opts) {
+    return {
+      racer: opts.racer, team: opts.team, car: opts.car, cls: opts.cls,
+      date: new Date(2026, 2, 14),
+      cash: CLASSES[opts.cls].cash,
+      slicks: 0, fuel: 0, parts: 0, trans: 0, chutes: 0, food: 0,
+      carHealth: 100, weather: "fair",
+      party: newParty(opts.racer, opts.names),
+      rivals: newRivals(),
+      log: [], graves: [],
+      trackIndex: 0, started: false, over: false, win: false, score: 0,
+      points: 0, seasonW: 0, seasonL: 0, eventsWon: 0,
+      eventW: 0, eventL: 0, entered: false, eventOver: false,
+      qualsLeft: 0, bestQual: null, qualRuns: [],
+      round: 0, field: [], opponent: null, lastRace: null, seed: null,
+      bestET: null, lastStory: {}
+    };
+  }
+  function alive(s) { return s.party.filter(p => p.health > 0 && !p.buried); }
+  function racerOf(s) { return s.party[0]; }
+  function livingCount(s) { return alive(s).length; }
+  function healthWord(p) {
+    if (p.health <= 0 || p.buried) return "out";
+    if (p.illness) return "ill";
+    if (p.health >= 5) return "good";
+    if (p.health === 4) return "fair";
+    if (p.health === 3) return "tired";
+    return "worn";
+  }
+  function partyHealth(s) {
+    const a = alive(s);
+    if (!a.length) return "none";
+    const avg = a.reduce((n, p) => n + p.health, 0) / a.length;
+    if (avg >= 4.5) return "good";
+    if (avg >= 3.5) return "fair";
+    if (avg >= 2.5) return "tired";
+    return "worn";
+  }
+  function currentTrack() { return TRACKS[S.trackIndex] || TRACKS[TRACKS.length - 1]; }
+  function nextTrack() { return TRACKS[S.trackIndex + 1] || null; }
+  function clsOf() { return CLASSES[S.cls]; }
+  function pointsLeader() {
+    let best = { name: S.team, points: S.points, isPlayer: true };
+    S.rivals.forEach(r => { if (r.points > best.points) best = { name: r.name, points: r.points, isPlayer: false }; });
+    return best;
+  }
+  function currentBaseET() {
+    const c = clsOf();
+    let et = c.baseET;
+    et += (100 - S.carHealth) / 100 * 0.40;
+    if (S.slicks < 2) et += 0.18;
+    if (S.fuel < c.fuelPerRun) et += 0.22;
+    const chief = S.party.find(p => p.role === "Crew Chief");
+    const tuner = S.party.find(p => p.role === "Tuner");
+    if (chief && (chief.health <= 0 || chief.buried || chief.illness)) et += 0.04;
+    if (tuner && (tuner.health <= 0 || tuner.buried || tuner.illness)) et += 0.07;
+    if (racerOf(S).health <= 2) et += 0.06;
+    return et;
+  }
+  function canRun() {
+    const c = clsOf();
+    return S.fuel >= c.fuelPerRun && S.slicks >= 1 && S.carHealth > 0 && racerOf(S).health > 0 && !racerOf(S).buried;
+  }
+
+  function log(s, msg) {
+    s.log.unshift(fmtDate(s.date) + " — " + msg);
+    if (s.log.length > 80) s.log.pop();
+  }
+  function setWeather(s) {
+    const roll = Math.random();
+    s.weather = roll < 0.12 ? "rain" : roll < 0.22 ? "wind" : roll < 0.40 ? "hot" : roll < 0.50 ? "humid" : "fair";
+  }
+  function damageHealth(s, n, reason) {
+    alive(s).forEach(p => { p.health = clamp(p.health - n, 0, 5); });
+    checkOuts(s, reason);
+  }
+  function checkOuts(s, reason) {
+    s.party.forEach(p => {
+      if (p.health <= 0 && !p.buried) {
+        p.health = 0; p.buried = true; p.illness = null;
+        const why = reason || p.lastIllness || "the road";
+        const epitaph = story("epitaph", { name: p.name, role: p.role, team: s.team, why: why, date: fmtDate(s.date) });
+        s.graves.push({ track: currentTrack().name, text: epitaph, name: p.name });
+        log(s, story("outLog", { name: p.name, why: why }));
+      }
+    });
+    if (racerOf(s).health <= 0 || racerOf(s).buried) endGame(s, false, "racer");
+    else if (livingCount(s) === 0) endGame(s, false, "racer");
+  }
+  function infect(s, person, illness) {
+    if (!person || person.health <= 0 || person.buried) return;
+    person.illness = illness.id;
+    person.lastIllness = illness.name;
+    person.daysIll = 0;
+    person.health = clamp(person.health - illness.severity + 1, 1, 5);
+    log(s, story("infect", { name: person.name, illness: illness.name }));
+  }
+  function tickIllness(s) {
+    alive(s).forEach(p => {
+      if (!p.illness) return;
+      p.daysIll++;
+      const ill = ILLNESSES.find(i => i.id === p.illness) || ILLNESSES[0];
+      if (chance(0.22) && p.daysIll >= 2) {
+        log(s, story("recover", { name: p.name, illness: ill.name }));
+        p.illness = null; p.daysIll = 0;
+        p.health = clamp(p.health + 1, 1, 5);
+      } else if (chance(0.08 + ill.severity * 0.03)) {
+        p.health = clamp(p.health - 1, 0, 5);
+        if (p.health <= 0) checkOuts(s, ill.name);
+      }
+    });
+  }
+  function tickDailyHealth(s) {
+    const need = livingCount(s) * 2;
+    if (s.food >= need) s.food -= need;
+    else {
+      s.food = 0;
+      damageHealth(s, 1, "an empty cooler");
+      if (!s.over) log(s, story("outOfFood"));
+    }
+    if (s.fuel >= 2) s.fuel -= 2;
+    else if (s.fuel > 0) s.fuel = 0;
+    tickIllness(s);
+    checkOuts(s);
+    if (s.cash < 0) s.cash = 0;
+  }
+
+  function computeScore(s) {
+    const c = CLASSES[s.cls];
+    const supplies = s.slicks * 15 + s.fuel * 3 + s.parts * 20 + s.trans * 25 + s.chutes * 15 + s.food * 0.2;
+    const people = alive(s).reduce((n, p) => n + p.health * 20, 0);
+    const raw = s.cash + supplies + people + s.points * 8 + s.carHealth * 2 + s.eventsWon * 80;
+    return Math.max(0, Math.round(raw * c.multiplier));
+  }
+  function loadScores() {
+    try { return JSON.parse(localStorage.getItem(SCORES_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function saveScore(s) {
+    const list = loadScores();
+    list.push({
+      name: s.racer, team: s.team, car: s.car, cls: CLASSES[s.cls].name,
+      score: s.score, points: s.points, date: fmtDate(s.date)
+    });
+    list.sort((a, b) => b.score - a.score);
+    localStorage.setItem(SCORES_KEY, JSON.stringify(list.slice(0, 10)));
+  }
+  function saveGame() {
+    if (!S || S.over || !S.started) return;
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) {}
+  }
+  function loadGame() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return null;
+      const g = JSON.parse(raw);
+      g.date = new Date(g.date);
+      if (!g.lastStory) g.lastStory = {};
+      if (!g.rivals) g.rivals = newRivals();
+      return g;
+    } catch (e) { return null; }
+  }
+  function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
+
+  function endGame(s, win, kind, extraMsg) {
+    if (s.over) return;
+    s.over = true; s.win = win; s.endKind = kind;
+    s.score = computeScore(s);
+    const vars = { team: s.team, car: s.car, name: s.racer, pts: s.points };
+    let msg;
+    if (win) {
+      if (kind === "swept" || s.eventsWon >= 4) msg = story("winChampSwept", vars);
+      else if (kind === "close") msg = story("winChampClose", vars);
+      else msg = story("winChamp", vars);
+      saveScore(s);
+    } else if (kind === "broke") msg = story("loseBroke", vars);
+    else if (kind === "car") msg = story("loseCar", vars);
+    else if (kind === "racer") msg = story("loseRacer", vars);
+    else if (kind === "points") msg = story("losePoints", vars);
+    else msg = story("loseMid", vars);
+    if (extraMsg) msg += "\n\n" + extraMsg;
+    s.endMessage = msg;
+    clearSave();
+    showEnd();
+  }
+
+  function clearUI() {
+    if (keyHandler) { document.removeEventListener("keydown", keyHandler); keyHandler = null; }
+    el.extra.innerHTML = "";
+    el.choices.innerHTML = "";
+    ui.eventOpen = false;
+  }
+  function setText(t) { el.text.textContent = t; }
+  function setArt(a) { el.art.textContent = a || ""; }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+  function showHud(show) {
+    if (!show || !S || !S.started || S.over) { el.hud.hidden = true; el.log.hidden = true; return; }
+    el.hud.hidden = false;
+    const tr = currentTrack();
+    el.hud.innerHTML =
+      "<strong>" + escapeHtml(S.team) + "</strong>  |  " + escapeHtml(S.car) + "  |  " + fmtDate(S.date) + "\n" +
+      "Cash: " + money(S.cash) + "   Food: " + Math.round(S.food) + "   Fuel: " + S.fuel + "   Slicks: " + S.slicks + "   Car: " + S.carHealth + "%\n" +
+      "Record: " + S.seasonW + "-" + S.seasonL + "   Points: " + S.points + "   At: " + tr.short + "   Crew: " + partyHealth(S);
+    if (S.log.length) { el.log.hidden = false; el.log.textContent = S.log.slice(0, 4).join("\n"); }
+    else el.log.hidden = true;
+  }
+  function choices(items) {
+    el.choices.innerHTML = "";
+    const map = {};
+    items.forEach((it, i) => {
+      const num = it.num || (i + 1);
+      map[String(num)] = it;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = num + ". " + it.label;
+      if (it.disabled) b.disabled = true;
+      b.addEventListener("click", () => { if (!b.disabled) it.fn(); });
+      el.choices.appendChild(b);
+    });
+    keyHandler = function (e) {
+      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+      const it = map[e.key];
+      if (it && !it.disabled) { e.preventDefault(); it.fn(); }
+    };
+    document.addEventListener("keydown", keyHandler);
+  }
+  function askText(placeholder, value, onSubmit, buttonLabel) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = placeholder;
+    input.value = value || "";
+    input.maxLength = 24;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    el.extra.appendChild(input);
+    setTimeout(() => input.focus(), 50);
+    const go = () => onSubmit(input.value.trim());
+    input.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+    choices([{ label: buttonLabel || "Continue", fn: go }]);
+  }
+  function showEvent(art, text, items) {
+    ui.eventOpen = true;
+    ui.screen = "event";
+    clearUI();
+    showHud(true);
+    setArt(art || "");
+    setText(text);
+    choices(items);
+    saveGame();
+  }
+
+
+  function showTitle() {
+    S = null; ui.screen = "title";
+    showHud(false); el.log.hidden = true; clearUI();
+    setArt(ART.title);
+    setText("A season on the drag racing circuit, from Texas Motorplex in Ennis to the Big Go in Indianapolis.\nYou are the racer. Name yourself, name the team and the car, and pick a class.\n\nGreen text. Black screen. Numbered choices. Qualifying, eliminations, a Christmas tree, and a lot of highway.");
+    const items = [
+      { label: "Start a season", fn: startSetup },
+      { label: "Learn about the circuit", fn: showLearn },
+      { label: "See the Championship Top Ten", fn: showScores }
+    ];
+    if (loadGame()) items.push({ label: "Continue a saved season", fn: resumeGame });
+    choices(items);
+  }
+  function resumeGame() {
+    const g = loadGame();
+    if (!g) return showTitle();
+    S = g;
+    if (S.eventOver || !S.entered) showPits();
+    else showPits();
+  }
+  function showLearn() {
+    clearUI(); showHud(false); setArt(ART.tree);
+    setText("THE DRAG CIRCUIT\n\nTravel from track to track in a hauler. Food and hauler fuel get used on the road. Random trouble happens: breakdowns, motels, sponsors, weather.\n\nAt each track you pay an entry, run qualifying, then an 8-car elimination ladder (quarter, semi, final).\n\nEach pass: pick a tune (safe, aggressive, all-in), then leave on the Christmas tree. Tap GO when the lights go green. Early is a red light and a loss. A good light can holeshot a quicker car.\n\nThe slip shows e.t., mph, and reaction time. Parts break. Tires shake. Chutes sometimes fail in a cartoon way. No gore. No real people are roasted.\n\nStreet/Bracket starts with more cash and a lower score multiplier. Pro Mod is the middle. Top Fuel is short money, high multiplier.\n\nWin the championship on points after the Big Go at Indianapolis — or go broke, break the car, or fail to make the finale.\n\nDigits 1-9 choose. Buttons work with a finger. A season can be saved and picked up later.");
+    choices([{ label: "Back", fn: showTitle }]);
+  }
+  function showScores() {
+    clearUI(); showHud(false); setArt(ART.trophy);
+    const list = loadScores();
+    let t = "CHAMPIONSHIP TOP TEN\n\n";
+    if (!list.length) t += "No champions yet. Someone has to win the year first.";
+    else list.forEach((r, i) => {
+      t += (i + 1) + ". " + r.name + "  —  " + r.team + "  (" + r.car + ")\n   " + r.cls + "   " + r.score + " pts-score   " + r.points + " season pts   " + r.date + "\n";
+    });
+    setText(t);
+    choices([{ label: "Back", fn: S && S.over ? showEnd : showTitle }]);
+  }
+  function startSetup() {
+    ui.setup = { names: DEFAULT_NAMES.slice() };
+    clearUI(); showHud(false); setArt(ART.car);
+    setText("Who is the racer?");
+    askText("Racer name", "Riley", v => { ui.setup.racer = v || "Riley"; askTeam(); });
+  }
+  function askTeam() {
+    clearUI(); showHud(false); setArt(ART.hauler);
+    setText("What is the team called?");
+    askText("Team name", "Night Owl", v => { ui.setup.team = v || "Night Owl"; askCar(); });
+  }
+  function askCar() {
+    clearUI(); showHud(false); setArt(ART.car);
+    setText("What do you call the car?");
+    askText("Car name", "Green Light", v => { ui.setup.car = v || "Green Light"; askClass(); });
+  }
+  function askClass() {
+    clearUI(); showHud(false); setArt(ART.tree);
+    setText("Pick a class. More cash means a lower score multiplier. Less cash means the year is sharper, and a championship is worth more.");
+    choices(Object.keys(CLASSES).map(id => {
+      const c = CLASSES[id];
+      return { label: c.name + "  —  " + money(c.cash) + "  (score x" + c.multiplier + ")", fn: () => { ui.setup.cls = id; askCrew(0); } };
+    }));
+    setText("Pick a class. More cash means a lower score multiplier. Less cash means the year is sharper, and a championship is worth more.\n\n" +
+      Object.keys(CLASSES).map(id => CLASSES[id].name + "\n" + CLASSES[id].blurb).join("\n\n"));
+  }
+  function askCrew(i) {
+    if (i >= ROLES.length) {
+      S = newGame({ racer: ui.setup.racer, team: ui.setup.team, car: ui.setup.car, cls: ui.setup.cls, names: ui.setup.names });
+      openStore(true, "start");
+      return;
+    }
+    clearUI(); showHud(false); setArt(ART.pits);
+    setText("Name your " + ROLES[i] + ".");
+    askText(ROLES[i] + " name", DEFAULT_NAMES[i], v => {
+      ui.setup.names[i] = v || DEFAULT_NAMES[i];
+      askCrew(i + 1);
+    });
+  }
+
+  function pricesAt(kind) {
+    const prices = {};
+    STORE_ITEMS.forEach(it => { prices[it.key] = kind === "start" ? it.start : it.track; });
+    return prices;
+  }
+  function openStore(isStart, kind) {
+    ui.storeKind = kind || (isStart ? "start" : "track");
+    ui.storeBuy = { slicks: 0, fuel: 0, parts: 0, trans: 0, chutes: 0, food: 0 };
+    ui.screen = "store";
+    if (isStart) S.started = false;
+    renderStore();
+  }
+  function renderStore() {
+    clearUI(); showHud(!!S.started); setArt(ART.shop);
+    const prices = pricesAt(ui.storeKind);
+    const spent = STORE_ITEMS.reduce((n, it) => n + (ui.storeBuy[it.key] || 0) * prices[it.key], 0);
+    const left = Math.round((S.cash - spent) * 100) / 100;
+    const intro = ui.storeKind === "start" ? story("shopIntroStart") : story("shopIntroTrack");
+    let t = intro + "\n\nCash on hand: " + money(S.cash) + "   This bill: " + money(spent) + "   After: " + money(left) + "\n";
+    if (S.started) t += "Already in the hauler: slicks " + S.slicks + ", fuel " + S.fuel + ", parts " + S.parts + ", trans " + S.trans + ", chutes " + S.chutes + ", food " + Math.round(S.food) + "\n";
+    t += "\nFuel here is " + clsOf().fuelName + ".";
+    setText(t);
+    const items = STORE_ITEMS.map(it => {
+      const n = ui.storeBuy[it.key] || 0;
+      return { label: it.name + "  (" + money(prices[it.key]) + " / " + it.unit + ")   x" + n, fn: () => {
+        const unit = it.key === "food" ? 50 : 1;
+        const next = n + unit;
+        const would = spent - n * prices[it.key] + next * prices[it.key];
+        if (would <= S.cash + 0.001) ui.storeBuy[it.key] = next;
+        renderStore();
+      } };
+    });
+    items.push({ label: "Remove last add from one item (cycle)", fn: () => {
+      for (let i = STORE_ITEMS.length - 1; i >= 0; i--) {
+        const k = STORE_ITEMS[i].key;
+        const step = k === "food" ? 50 : 1;
+        if ((ui.storeBuy[k] || 0) >= step) { ui.storeBuy[k] -= step; break; }
+      }
+      renderStore();
+    }});
+    if (ui.storeKind === "start") items.push({ label: "Pay the bill and go to the Motorplex", disabled: left < 0, fn: () => checkoutStore(prices, spent, true) });
+    else {
+      items.push({ label: "Pay the bill", disabled: left < 0 || spent <= 0, fn: () => checkoutStore(prices, spent, false) });
+      items.push({ label: "Leave the shop", fn: showPits });
+    }
+    choices(items);
+  }
+  function checkoutStore(prices, spent, depart) {
+    S.cash = Math.round((S.cash - spent) * 100) / 100;
+    STORE_ITEMS.forEach(it => { S[it.key] += (ui.storeBuy[it.key] || 0); });
+    if (depart) {
+      S.started = true;
+      log(S, "The season opens at Texas Motorplex, Ennis.");
+      arriveTrack(true);
+    } else {
+      log(S, "You bought supplies at the track shop.");
+      showPits();
+    }
+  }
+
+  function suppliesText() {
+    const c = clsOf();
+    return S.racer + "  |  " + S.team + "  |  " + S.car + "  |  " + c.name + "\n" +
+      "Date: " + fmtDate(S.date) + "\n" +
+      "Cash: " + money(S.cash) + "\n" +
+      "Slicks: " + S.slicks + "    Fuel (" + c.fuelName + "): " + S.fuel + " cans\n" +
+      "Engine parts: " + S.parts + "    Spare trans: " + S.trans + "    Chutes: " + S.chutes + "\n" +
+      "Food: " + Math.round(S.food) + " meals    Car condition: " + S.carHealth + "%\n" +
+      "Crew: " + alive(S).map(p => p.name + " (" + p.role + ", " + healthWord(p) + ")").join(", ") + "\n" +
+      (S.graves.length ? "Out: " + S.graves.map(g => g.name).join(", ") + "\n" : "") +
+      "Season record: " + S.seasonW + "-" + S.seasonL + "    Event wins: " + S.eventsWon + "    Points: " + S.points + "\n" +
+      (S.bestET != null ? "Best e.t. this year: " + fmtET(S.bestET) + "\n" : "");
+  }
+  function showSupplies() {
+    clearUI(); showHud(true); setArt(ART.hauler);
+    setText(suppliesText());
+    choices([{ label: "Back", fn: showPits }]);
+  }
+  function showStandings() {
+    clearUI(); showHud(true); setArt(ART.trophy);
+    const rows = [{ name: S.team + " (you)", points: S.points, wins: S.eventsWon }].concat(
+      S.rivals.map(r => ({ name: r.name, points: r.points, wins: r.eventsWon }))
+    ).sort((a, b) => b.points - a.points || b.wins - a.wins);
+    let t = story("standingsFlavor", { pts: S.points, lead: rows[0].name, team: S.team }) + "\n\n";
+    rows.slice(0, 10).forEach((r, i) => {
+      t += (i + 1) + ". " + r.name + "   " + r.points + " pts   events won: " + r.wins + "\n";
+    });
+    setText(t);
+    choices([{ label: "Back", fn: showPits }]);
+  }
+  function showSchedule() {
+    clearUI(); showHud(true); setArt(ART.track);
+    let t = "THE CIRCUIT\n\n";
+    TRACKS.forEach((tr, i) => {
+      const mark = i < S.trackIndex ? "done" : i === S.trackIndex ? "YOU" : "    ";
+      t += (i + 1) + ". [" + mark + "] " + tr.name + "   (" + tr.mile + " mi)  fee " + money(tr.fee) + (tr.kind === "finale" ? "   FINALE" : "") + "\n";
+    });
+    setText(t);
+    choices([{ label: "Back", fn: showPits }]);
+  }
+
+  function talkCrew() {
+    clearUI(); showHud(true); setArt(ART.pits);
+    const lines = alive(S).map(p => {
+      const v = { name: p.name, illness: p.illness ? (ILLNESSES.find(i => i.id === p.illness) || { name: "something" }).name : "", role: p.role };
+      if (p.illness) return story("talkIll", v);
+      if (p.health <= 2) return story("talkWorn", v);
+      if (S.food < livingCount(S) * 8) return story("talkHungry", v);
+      if (p.role === "Racer") return story("talkRacer", v);
+      if (p.role === "Crew Chief") return story("talkChief", v);
+      if (p.role === "Tuner") return story("talkTuner", v);
+      return story("talkMech", v);
+    });
+    setText(lines.join("\n\n"));
+    choices([{ label: "Back", fn: showPits }]);
+  }
+  function restDays(n) {
+    ui.eventOpen = false;
+    for (let i = 0; i < n; i++) {
+      if (S.over) return;
+      S.date = addDays(S.date, 1);
+      setWeather(S);
+      tickDailyHealth(S);
+      if (S.over) return;
+      alive(S).forEach(p => { if (chance(0.45)) p.health = clamp(p.health + 1, 0, 5); });
+      if (S.carHealth < 100 && chance(0.4)) S.carHealth = clamp(S.carHealth + 2, 0, 100);
+      if (maybeRoadEvent(0.08) || ui.eventOpen) return;
+    }
+    if (!S.over && !ui.eventOpen) {
+      log(S, story("restDays", { days: plural(n, "day") }));
+      const done = ui.restDone || showPits;
+      ui.restDone = null;
+      done();
+    }
+  }
+
+
+  function showPits() {
+    if (S.over) return showEnd();
+    ui.screen = "pits";
+    ui.resume = showPits;
+    clearUI(); showHud(true);
+    const tr = currentTrack();
+    setArt(S.eventOver ? ART.hauler : ART.pits);
+    let t = tr.name + (tr.kind === "finale" ? "  —  FINALE" : "") + "\n\n";
+    t += tr.note + "\nWeather: " + S.weather + ".\n";
+    if (!S.entered && !S.eventOver) t += "\nEntry fee: " + money(tr.fee) + ". Purse to win: " + money(tr.purse) + ".";
+    else if (S.entered && !S.eventOver) {
+      t += "\nYou are in. Qualifying: " + (S.qualsLeft > 0 ? S.qualsLeft + " pass(es) left" : "complete") + (S.bestQual != null ? ", best " + fmtET(S.bestQual.et) + " at " + fmtMPH(S.bestQual.mph) + " mph" : ", no time") + ".";
+      if (S.qualsLeft <= 0 && S.round === 0) t += " Eliminations can start.";
+      if (S.round > 0) t += " You are in eliminations (round " + S.round + "). Record this event: " + S.eventW + "-" + S.eventL + ".";
+    } else t += "\nThis event is over for you. Record: " + S.eventW + "-" + S.eventL + ".";
+    setText(t);
+    const items = [];
+    if (!S.entered && !S.eventOver) items.push({ label: "Enter the event (" + money(tr.fee) + ")", fn: payEntry });
+    if (S.entered && !S.eventOver && S.qualsLeft > 0) items.push({ label: "Make a qualifying pass", fn: startQual });
+    if (S.entered && !S.eventOver && S.round === 0 && (S.qualsLeft <= 0 || (!canRun() && S.bestQual))) items.push({ label: "Start eliminations", fn: startElims });
+    if (S.entered && !S.eventOver && S.round === 0 && !canRun() && S.qualsLeft > 0 && !S.bestQual) items.push({ label: "Scratch this event (cannot run)", fn: scratchEvent });
+    if (S.entered && !S.eventOver && S.round > 0 && S.opponent) items.push({ label: "Go to the lanes vs " + S.opponent.name, fn: pickTune });
+    if (S.eventOver) {
+      if (nextTrack()) items.push({ label: "Travel to " + nextTrack().short, fn: hitTheRoad });
+      else items.push({ label: "Close the season", fn: finishSeason });
+    }
+    items.push({ label: "Buy supplies", fn: () => openStore(false, "track") });
+    items.push({ label: "Rest a day", fn: () => restDays(1) });
+    items.push({ label: "Talk to the crew", fn: talkCrew });
+    items.push({ label: "Check supplies", fn: showSupplies });
+    items.push({ label: "Points standings", fn: showStandings });
+    items.push({ label: "Look at the schedule", fn: showSchedule });
+    choices(items);
+    saveGame();
+  }
+
+  function arriveTrack(isStart) {
+    S.entered = false;
+    S.eventOver = false;
+    S.eventW = 0; S.eventL = 0;
+    S.qualsLeft = 0; S.bestQual = null; S.qualRuns = [];
+    S.round = 0; S.field = []; S.opponent = null; S.seed = null;
+    setWeather(S);
+    const tr = currentTrack();
+    const pool = "arr:" + tr.name;
+    const blurb = (STORIES[pool] ? story(pool, { name: (alive(S)[0] || { name: S.racer }).name }) : tr.note);
+    showEvent(ART.track, "You have arrived at " + tr.name + ".\n\n" + blurb, [
+      { label: isStart ? "Go to the pits" : "Pull into the pits", fn: showPits }
+    ]);
+  }
+
+  function payEntry() {
+    const tr = currentTrack();
+    if (S.cash < tr.fee) {
+      showEvent("", story("cantAfford", { n: money(tr.fee) }), [
+        { label: "Scratch this event and travel on", fn: scratchEvent },
+        { label: "Back to the pits", fn: showPits }
+      ]);
+      return;
+    }
+    S.cash = Math.round((S.cash - tr.fee) * 100) / 100;
+    S.entered = true;
+    S.qualsLeft = 2;
+    S.round = 0;
+    log(S, "Entered " + tr.name + " for " + money(tr.fee) + ".");
+    const item = chance(0.25) ? pick(["bolt", "trans blanket strap", "chute pin", "number plate", "throttle clip"]) : null;
+    const msg = story("entryPaid", { n: money(tr.fee) }) + "\n\n" + (item ? story("techIssue", { item: item, name: S.racer }) : story("techPass", { name: S.racer }));
+    showEvent(ART.pits, msg, [{ label: "Continue", fn: showPits }]);
+  }
+  function scratchEvent() {
+    S.eventOver = true;
+    S.entered = false;
+    log(S, "Scratched " + currentTrack().short + " — could not pay the entry.");
+    simulateFieldPoints(false, 0);
+    if (!nextTrack() ) { finishSeason(); return; }
+    showPits();
+  }
+
+  function hitTheRoad() {
+    const nxt = nextTrack();
+    if (!nxt) return finishSeason();
+    ui.resume = continueTravel;
+    ui.travelDaysLeft = Math.max(1, nxt.daysFromPrev);
+    log(S, "The hauler rolls toward " + nxt.name + ".");
+    continueTravel();
+  }
+  function continueTravel() {
+    if (S.over) return;
+    ui.resume = continueTravel;
+    while (ui.travelDaysLeft > 0) {
+      ui.travelDaysLeft--;
+      S.date = addDays(S.date, 1);
+      setWeather(S);
+      tickDailyHealth(S);
+      if (S.over) return;
+      if (S.fuel <= 0 && chance(0.5)) {
+        showEvent(ART.hauler, story("outOfFuel", { fuel: clsOf().fuelName, name: (alive(S)[0] || { name: S.racer }).name }), [
+          { label: "Scrounge 4 cans for " + money(20), fn: () => {
+            if (S.cash >= 20) { S.cash -= 20; S.fuel += 4; }
+            else { S.fuel += 2; S.cash = Math.max(0, S.cash); }
+            afterEvt();
+          }}
+        ]);
+        return;
+      }
+      if (maybeRoadEvent(0.30)) return;
+    }
+    S.trackIndex++;
+    arriveTrack(false);
+  }
+  function afterEvt() {
+    if (S.over) return;
+    const fn = ui.resume || showPits;
+    fn();
+  }
+
+  function maybeRoadEvent(p) {
+    if (S.over) return false;
+    if (!chance(p)) return false;
+    const evs = roadEvents();
+    if (!evs.length) return false;
+    evs[rand(evs.length)]();
+    return true;
+  }
+  function someone() { return pick(alive(S)); }
+  function roadEvents() {
+    const evs = [];
+    const add = (fn, w) => { for (let i = 0; i < (w || 1); i++) evs.push(fn); };
+
+    add(() => {
+      const part = pick(["belt", "alternator", "trailer jack", "hub bearing", "coolant hose"]);
+      if (S.parts > 0 && chance(0.55)) {
+        S.parts--;
+        S.date = addDays(S.date, 1); tickDailyHealth(S);
+        if (S.over) return;
+        log(S, "The hauler needed a spare.");
+        showEvent(ART.hauler, story("haulerSpare", { part: part, name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+      } else {
+        for (let i = 0; i < 3; i++) { if (S.over) return; S.date = addDays(S.date, 1); setWeather(S); tickDailyHealth(S); }
+        if (S.over) return;
+        log(S, "You improvised a hauler repair.");
+        showEvent(ART.hauler, story("haulerNoSpare", { part: part }), [{ label: "Continue", fn: afterEvt }]);
+      }
+    }, 3);
+
+    add(() => {
+      const n = Math.min(S.cash, 15 + rand(30));
+      if (n < 10) { afterEvt(); return; }
+      S.cash -= n;
+      alive(S).forEach(p => { if (chance(0.5)) p.health = clamp(p.health + 1, 0, 5); });
+      log(S, "A motel night cost " + money(n) + ".");
+      showEvent(ART.motel, story("motelNight", { n: money(n), name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 3);
+
+    add(() => {
+      const n = 40 + rand(80);
+      S.cash += n;
+      log(S, "A sponsor sent " + money(n) + ".");
+      showEvent("", story("sponsorGood", { n: money(n) }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      const n = Math.min(S.cash, 20 + rand(50));
+      if (n < 8) { afterEvt(); return; }
+      S.cash = Math.round((S.cash - n) * 100) / 100;
+      log(S, "A bad sponsor call cost " + money(n) + ".");
+      showEvent("", story("sponsorBad", { n: money(n) }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      const days = 1 + rand(2);
+      for (let i = 0; i < days; i++) { S.date = addDays(S.date, 1); S.weather = "rain"; tickDailyHealth(S); if (S.over) return; }
+      log(S, "Rain delayed the hauler " + plural(days, "day") + ".");
+      showEvent(ART.hauler, story("rainDelay", { days: plural(days, "day") }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      const n = 20 + rand(40);
+      const cost = Math.min(S.cash, Math.round(n * 0.5));
+      S.cash -= cost; S.food += n;
+      log(S, "You restocked " + n + " meals.");
+      showEvent(ART.motel, story("foodStop", { n: n, name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      S.date = addDays(S.date, 1); tickDailyHealth(S);
+      if (S.over) return;
+      log(S, "The hauler threw a flat.");
+      showEvent(ART.hauler, story("flatHauler", { name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      log(S, "A radio interview.");
+      showEvent("", story("radioInterview", { name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      const days = 1 + rand(2);
+      for (let i = 0; i < days; i++) { S.date = addDays(S.date, 1); tickDailyHealth(S); if (S.over) return; }
+      log(S, "A wrong exit cost " + plural(days, "day") + ".");
+      showEvent(ART.hauler, story("wrongExit", { days: plural(days, "day") }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      const item = pick(["slicks", "parts", "chutes", "trans"]);
+      const addn = item === "slicks" ? 2 : 1;
+      S[item] += addn;
+      log(S, "You picked up a spare " + item + ".");
+      showEvent(ART.shop, story("partsFind", { item: item === "slicks" ? "couple of slicks" : item === "trans" ? "spare trans" : item === "chutes" ? "parachute pack" : "crate of engine parts" }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      S.date = addDays(S.date, 1); tickDailyHealth(S);
+      if (S.over) return;
+      log(S, "A weigh station delayed you.");
+      showEvent(ART.hauler, story("weighStation"), [{ label: "Continue", fn: afterEvt }]);
+    }, 1);
+
+    add(() => {
+      const rival = pick(S.rivals).name;
+      log(S, "You crossed paths with " + rival + ".");
+      showEvent(ART.hauler, story("rivalConvoy", { rival: rival }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      alive(S).forEach(p => { if (chance(0.4)) p.health = clamp(p.health + 1, 0, 5); });
+      showEvent("", story("fanPhoto", { name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      if (S.parts > 0 && chance(0.5)) S.parts--;
+      else if (S.slicks > 0) S.slicks = Math.max(0, S.slicks - 1);
+      log(S, "Tools or a small part walked off in the night.");
+      showEvent(ART.motel, story("toolTheft", { name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      if (S.weather !== "hot") S.weather = "hot";
+      const p = someone();
+      if (p && !p.illness && chance(0.5)) infect(S, p, ILLNESSES.find(i => i.id === "heat") || ILLNESSES[0]);
+      if (p && !p.illness && p.health > 1 && chance(0.4)) p.health = clamp(p.health - 1, 1, 5);
+      log(S, "A heat wave rolled over the hauler.");
+      showEvent(ART.hauler, story("heatWave", { name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      log(S, "Fair weather, clean miles.");
+      showEvent(ART.hauler, story("goodWeather"), [{ label: "Continue", fn: afterEvt }]);
+    }, 2);
+
+    add(() => {
+      const n = 25 + rand(60);
+      S.cash += n;
+      log(S, "A surprise check for " + money(n) + ".");
+      showEvent("", story("paycheck", { n: money(n), name: (someone() || { name: S.racer }).name }), [{ label: "Continue", fn: afterEvt }]);
+    }, 1);
+
+    add(() => {
+      const p = someone();
+      if (!p) { afterEvt(); return; }
+      infect(S, p, pick(ILLNESSES));
+      showEvent("", story("infect", { name: p.name, illness: (ILLNESSES.find(i => i.id === p.illness) || { name: "a slump" }).name }), [
+        { label: "Keep rolling", fn: afterEvt },
+        { label: "Stop and rest 2 days", fn: () => { ui.restDone = afterEvt; restDays(2); } }
+      ]);
+    }, 3);
+
+    add(() => {
+      const others = alive(S).filter(x => x.role !== "Racer");
+      if (!others.length) { afterEvt(); return; }
+      const p = pick(others);
+      showEvent("", story("crewQuitEvent", { name: p.name }), [
+        { label: "Talk them into staying", fn: () => {
+          if (chance(0.7)) {
+            log(S, p.name + " stayed on the crew.");
+            showEvent("", story("crewStay", { name: p.name, role: p.role }), [{ label: "Continue", fn: afterEvt }]);
+          } else {
+            p.health = 0; p.buried = true;
+            S.graves.push({ track: (currentTrack() || {}).name, name: p.name, text: p.name + " left " + S.team + " on the road, " + fmtDate(S.date) + "." });
+            log(S, p.name + " left the team.");
+            showEvent("", story("quit", { name: p.name }), [{ label: "Continue", fn: afterEvt }]);
+          }
+        }},
+        { label: "Wish them well and let them go", fn: () => {
+          p.health = 0; p.buried = true;
+          S.graves.push({ track: (currentTrack() || {}).name, name: p.name, text: p.name + " left " + S.team + " on the road, " + fmtDate(S.date) + "." });
+          log(S, p.name + " left the team.");
+          showEvent("", story("quit", { name: p.name }), [{ label: "Continue", fn: afterEvt }]);
+        }}
+      ]);
+    }, 2);
+
+    return evs;
+  }
+
+
+  function consumeRun() {
+    const c = clsOf();
+    S.fuel = Math.max(0, S.fuel - c.fuelPerRun);
+    const slickUse = c.slickPerRun;
+    if (slickUse >= 1) S.slicks = Math.max(0, S.slicks - 1);
+    else if (chance(slickUse)) S.slicks = Math.max(0, S.slicks - 1);
+    if (S.carHealth > 0 && chance(0.15)) S.carHealth = clamp(S.carHealth - 1, 0, 100);
+  }
+
+  function makeOpponent(name) {
+    const base = currentBaseET();
+    const et = Math.max(cMinET(), base + (Math.random() * 0.24 - 0.07));
+    const rt = 0.035 + Math.random() * 0.150;
+    return { name: name || pick(S.rivals).name, et: +et.toFixed(3), rt: +rt.toFixed(3), mph: Math.round(etToMph(et, S.cls)) };
+  }
+  function cMinET() { return clsOf().baseET * 0.88; }
+
+  function buildField() {
+    const used = {};
+    const names = [];
+    const pool = S.rivals.slice().sort(() => Math.random() - 0.5);
+    for (let i = 0; i < 7; i++) {
+      const n = (pool[i] || pick(S.rivals)).name;
+      if (!used[n]) { used[n] = true; names.push(n); }
+      else names.push(pick(RIVAL_NAMES.filter(x => !used[x])) || ("Racer " + (i + 2)));
+    }
+    return names.map(n => {
+      const o = makeOpponent(n);
+      o.qual = o.et + (Math.random() * 0.08 - 0.02);
+      return o;
+    });
+  }
+
+  function startQual() {
+    if (!canRun()) {
+      const need = S.fuel < clsOf().fuelPerRun ? clsOf().fuelName : "slicks";
+      showEvent("", story("cantRaceSupplies", { need: need }), [
+        { label: "Forfeit this pass", fn: () => { S.qualsLeft = Math.max(0, S.qualsLeft - 1); showPits(); } },
+        { label: "Skip remaining qualifying", fn: () => { S.qualsLeft = 0; showPits(); } },
+        { label: "Back to the pits", fn: showPits }
+      ]);
+      return;
+    }
+    S._raceMode = "qual";
+    S.opponent = null;
+    pickTune();
+  }
+
+  function startElims() {
+    if (S.bestQual == null) {
+      S.eventOver = true;
+      log(S, "DNQ at " + currentTrack().short + ".");
+      simulateFieldPoints(false, 0);
+      showEvent(ART.track, story("dnq", { track: currentTrack().name, name: S.racer, team: S.team }), [{ label: "Back to the pits", fn: showPits }]);
+      return;
+    }
+    const others = buildField();
+    const field = others.concat([{ name: S.racer, et: S.bestQual.et, qual: S.bestQual.et, mph: S.bestQual.mph, isPlayer: true }]);
+    field.sort((a, b) => a.qual - b.qual);
+    const seed = field.findIndex(x => x.isPlayer) + 1;
+    if (seed < 1 || seed > 8) {
+      S.eventOver = true;
+      log(S, "DNQ at " + currentTrack().short + ".");
+      simulateFieldPoints(false, 0);
+      showEvent(ART.track, story("dnq", { track: currentTrack().name, team: S.team }), [{ label: "Back to the pits", fn: showPits }]);
+      return;
+    }
+    S.seed = seed;
+    S.field = field;
+    S.round = 1;
+    S.points += 10;
+    log(S, "Qualified " + seed + " at " + currentTrack().short + " with " + fmtET(S.bestQual.et) + ".");
+    pairElim();
+  }
+
+  function pairElim() {
+    // opponent from remaining field, roughly by seed
+    const oppPool = S.field.filter(x => !x.isPlayer && !x.out);
+    if (!oppPool.length) {
+      // won the event without a last pairing? treat as event win
+      winEvent();
+      return;
+    }
+    // seed vs (9-seed) style if possible
+    const want = 9 - S.seed;
+    let opp = oppPool.find((x, i, arr) => {
+      const rank = S.field.filter(f => !f.out).sort((a, b) => a.qual - b.qual).indexOf(x) + 1;
+      return rank === want;
+    }) || pick(oppPool);
+    S.opponent = makeOpponent(opp.name);
+    S.opponent._ref = opp;
+    showEvent(ART.tree, story("elimIntro", { seed: S.seed, rival: S.opponent.name, name: (someone() || { name: S.racer }).name }), [
+      { label: "Choose a tune", fn: pickTune }
+    ]);
+  }
+
+  function pickTune() {
+    if (!canRun()) {
+      const need = S.fuel < clsOf().fuelPerRun ? clsOf().fuelName : "slicks";
+      showEvent("", story("cantRaceSupplies", { need: need }), [
+        { label: "Forfeit the pass", fn: () => {
+          if (S._raceMode === "qual" || !S.opponent) {
+            S.qualsLeft = Math.max(0, S.qualsLeft - 1);
+            showPits();
+          } else loseRound("forfeit");
+        }},
+        { label: "Back to the pits", fn: showPits }
+      ]);
+      return;
+    }
+    const rival = S.opponent ? S.opponent.name : "the clock";
+    clearUI(); showHud(true); setArt(ART.tree);
+    setText(story("tuneAsk", { rival: rival }));
+    choices([
+      { label: TUNES.safe.label, fn: () => startTree("safe") },
+      { label: TUNES.aggressive.label, fn: () => startTree("aggressive") },
+      { label: TUNES.allin.label, fn: () => startTree("allin") }
+    ]);
+  }
+
+  function treeArt(state) {
+    // state: { pre, stg, a1, a2, a3, green, red }
+    const on = (v, yes, no) => (v ? yes : no);
+    return (
+      "        CHRISTMAS TREE\n" +
+      "         " + on(state.pre, "o   o", ".   .") + "  PRE\n" +
+      "         " + on(state.stg, "o   o", ".   .") + "  STG\n" +
+      "         " + on(state.a1, "*   *", ".   .") + "\n" +
+      "         " + on(state.a2, "*   *", ".   .") + "\n" +
+      "         " + on(state.a3, "*   *", ".   .") + "\n" +
+      "         " + on(state.green, "G   G", ".   .") + "  GREEN\n" +
+      "         " + on(state.red, "X   X", ".   .") + "  RED\n"
+    );
+  }
+
+  function startTree(tuneId) {
+    S._tune = tuneId;
+    const pro = clsOf().tree === "pro";
+    if (typeof window !== "undefined" && window.__dragTest) {
+      const red = Math.random() < 0.07;
+      const rt = red ? -(0.004 + Math.random() * 0.03) : (0.018 + Math.random() * 0.110);
+      finishTree(Math.round(rt * 1000) / 1000);
+      return;
+    }
+    clearUI(); showHud(true);
+    setText((pro ? story("treePro") : story("treeSportsman")) + "\n\nStage the car, then TAP GO when the tree goes green. Early is a red light.");
+    setArt(treeArt({ pre: true, stg: false, a1: false, a2: false, a3: false, green: false, red: false }));
+    ui.tree = { running: false, greenAt: 0, done: false, timers: [] };
+    const field = document.createElement("div");
+    field.id = "tree-field";
+    el.extra.appendChild(field);
+    field.textContent = treeArt({ pre: true, stg: false });
+    choices([{ label: "Stage, then watch the tree", fn: () => runTreeSequence(pro, field) }]);
+  }
+
+  function runTreeSequence(pro, field) {
+    if (ui.tree && ui.tree.running) return;
+    ui.tree.running = true;
+    const paint = (st) => {
+      const art = treeArt(st);
+      setArt(art);
+      if (field) field.textContent = art;
+    };
+    paint({ pre: true, stg: true });
+    const t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const delays = pro
+      ? [{ t: 400, st: { pre: 1, stg: 1, a1: 1, a2: 1, a3: 1 } }, { t: 800, st: { pre: 1, stg: 1, a1: 1, a2: 1, a3: 1, green: 1 }, green: true }]
+      : [
+          { t: 400, st: { pre: 1, stg: 1, a1: 1 } },
+          { t: 900, st: { pre: 1, stg: 1, a1: 1, a2: 1 } },
+          { t: 1400, st: { pre: 1, stg: 1, a1: 1, a2: 1, a3: 1 } },
+          { t: 1900, st: { pre: 1, stg: 1, a1: 1, a2: 1, a3: 1, green: 1 }, green: true }
+        ];
+    // jitter the green a little so you cannot count perfectly
+    const jitter = rand(120);
+    delays.forEach(d => {
+      const id = setTimeout(() => {
+        if (!ui.tree || ui.tree.done) return;
+        paint(d.st);
+        if (d.green) ui.tree.greenAt = (typeof performance !== "undefined" ? performance.now() : Date.now());
+      }, d.t + (d.green ? jitter : 0));
+      ui.tree.timers.push(id);
+    });
+    const go = () => {
+      if (!ui.tree || ui.tree.done) return;
+      const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+      if (!ui.tree.greenAt) {
+        ui.tree.done = true;
+        ui.tree.timers.forEach(clearTimeout);
+        paint({ pre: 1, stg: 1, red: 1 });
+        finishTree(-0.120);
+        return;
+      }
+      const rt = (now - ui.tree.greenAt) / 1000;
+      ui.tree.done = true;
+      ui.tree.timers.forEach(clearTimeout);
+      if (rt < 0) paint({ pre: 1, stg: 1, red: 1 });
+      else paint({ pre: 1, stg: 1, a1: 1, a2: 1, a3: 1, green: 1 });
+      finishTree(Math.round(rt * 1000) / 1000);
+    };
+    el.choices.innerHTML = "";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "1. GO";
+    b.addEventListener("click", go);
+    el.choices.appendChild(b);
+    if (keyHandler) document.removeEventListener("keydown", keyHandler);
+    keyHandler = function (e) {
+      if (e.target && e.target.tagName === "INPUT") return;
+      if (e.key === "1" || e.key === " " || e.key === "Enter" || e.key === "g" || e.key === "G") { e.preventDefault(); go(); }
+    };
+    document.addEventListener("keydown", keyHandler);
+  }
+
+  function finishTree(rt) {
+    if (ui.tree && ui.tree.timers) ui.tree.timers.forEach(clearTimeout);
+    ui.tree = null;
+    resolveRace(S._tune || "aggressive", rt);
+  }
+
+  function resolveRace(tuneId, rt) {
+    const tune = TUNES[tuneId] || TUNES.aggressive;
+    const isQual = S._raceMode === "qual" || !S.opponent;
+    const opp = isQual ? null : S.opponent;
+    consumeRun();
+
+    const result = {
+      rt: rt, tune: tuneId, isQual: isQual, rival: opp ? opp.name : "Qualifying",
+      event: "clean", win: false, dq: false, red: false, et: null, mph: null,
+      oet: opp ? opp.et : null, omph: opp ? opp.mph : null, ort: opp ? opp.rt : null,
+      margin: null, part: null, text: ""
+    };
+
+    if (rt < 0) {
+      result.red = true;
+      result.event = "redlight";
+      result.win = false;
+      result.dq = !isQual;
+      applyRaceResult(result);
+      return;
+    }
+
+    // opponent red, sometimes
+    if (opp && chance(0.06)) {
+      result.event = "oppRed";
+      result.win = true;
+      result.ort = -(0.005 + Math.random() * 0.04);
+      result.ort = +result.ort.toFixed(3);
+      let et = currentBaseET() + tune.etAdj + (Math.random() * 0.06 - 0.02);
+      result.et = +Math.max(cMinET(), et).toFixed(3);
+      result.mph = Math.round(etToMph(result.et, S.cls));
+      applyRaceResult(result);
+      return;
+    }
+
+    // breakage / incidents
+    const risk = 0.08 * tune.risk + (S.carHealth < 40 ? 0.08 : 0) + (tuneId === "allin" ? 0.06 : 0);
+    const roll = Math.random();
+    let et = currentBaseET() + tune.etAdj + (Math.random() * 0.07 - 0.03);
+
+    if (roll < risk * 0.18) {
+      result.event = "engineBlow";
+      result.dq = true;
+      result.win = false;
+      S.carHealth = clamp(S.carHealth - (35 + rand(50)), 0, 100);
+      applyRaceResult(result);
+      return;
+    }
+    if (!isQual && roll < risk * 0.32) {
+      result.event = "centerline";
+      result.dq = true;
+      result.win = false;
+      result.et = +Math.max(cMinET(), et + 0.05).toFixed(3);
+      result.mph = Math.round(etToMph(result.et, S.cls));
+      applyRaceResult(result);
+      return;
+    }
+    if (roll < risk * 0.50) {
+      result.event = "smokedTires";
+      et += 0.35 + Math.random() * 0.40;
+    } else if (roll < risk * 0.70) {
+      result.event = "tireShake";
+      et += 0.12 + Math.random() * 0.28;
+      S.carHealth = clamp(S.carHealth - 3, 0, 100);
+    } else if (roll < risk * 0.88) {
+      result.event = "brokenPart";
+      result.part = pick(["transmission", "rear end", "header", "blower belt", "axle", "clutch"]);
+      et += 0.10 + Math.random() * 0.20;
+      S.carHealth = clamp(S.carHealth - (8 + rand(12)), 0, 100);
+      const key = result.part === "transmission" ? "trans" : "parts";
+      if (S[key] > 0) {
+        S[key]--;
+        log(S, story("repairUsedPart", { part: result.part, name: (someone() || { name: S.racer }).name }));
+      }
+    }
+
+    result.et = +Math.max(cMinET(), et).toFixed(3);
+    result.mph = Math.round(etToMph(result.et, S.cls));
+
+    if (!isQual && S.chutes > 0 && chance(0.06 + (tune.risk > 1.5 ? 0.04 : 0))) {
+      result.event = result.event === "clean" ? "chuteFail" : result.event;
+      result._chute = true;
+      S.carHealth = clamp(S.carHealth - 6, 0, 100);
+      if (S.chutes > 0 && chance(0.7)) S.chutes--;
+    }
+
+    if (opp && !result.dq) {
+      const pkg = result.et + rt;
+      const opkg = opp.et + opp.rt;
+      result.margin = Math.abs(pkg - opkg);
+      result.margin = +result.margin.toFixed(3);
+      result.win = pkg < opkg;
+      if (result.win && result.et > opp.et + 0.01 && rt + 0.02 < opp.rt) result.event = result.event === "clean" || result._chute ? (result._chute ? "chuteFail" : "holeshotWin") : result.event;
+      if (!result.win && result.et + 0.01 < opp.et && rt > opp.rt + 0.02) result.event = "holeshotLoss";
+      if (result.win && result.event === "clean") result.event = "raceWinClean";
+      if (!result.win && result.event === "clean") result.event = "raceLossClean";
+    } else if (isQual) {
+      result.win = true;
+    }
+
+    applyRaceResult(result);
+  }
+
+  function raceVars(r) {
+    return {
+      et: r.et != null ? fmtET(r.et) : "—",
+      mph: r.mph != null ? fmtMPH(r.mph) : "—",
+      rt: fmtRT(r.rt),
+      oet: r.oet != null ? fmtET(r.oet) : "—",
+      omph: r.omph != null ? fmtMPH(r.omph) : "—",
+      ort: r.ort != null ? fmtRT(r.ort) : "—",
+      margin: r.margin != null ? fmtET(r.margin) : "—",
+      rival: r.rival,
+      part: r.part || "part",
+      name: S.racer,
+      track: currentTrack().name
+    };
+  }
+
+  function slipText(r) {
+    let t = "TIMING SLIP  —  " + currentTrack().short + "\n";
+    t += (r.isQual ? "QUALIFYING" : ("vs " + r.rival)) + "   Tune: " + (TUNES[r.tune] || TUNES.aggressive).name + "\n";
+    t += "You   RT " + fmtRT(r.rt);
+    if (r.et != null) t += "   ET " + fmtET(r.et) + "   " + fmtMPH(r.mph) + " mph";
+    else t += "   ET —   no time";
+    t += "\n";
+    if (!r.isQual) {
+      t += r.rival + "   RT " + (r.ort != null ? fmtRT(r.ort) : "—");
+      if (r.oet != null) t += "   ET " + fmtET(r.oet) + "   " + (r.omph != null ? fmtMPH(r.omph) : "—") + " mph";
+      t += "\n";
+      if (r.margin != null && !r.red && !r.dq) t += "Margin: " + fmtET(r.margin) + "\n";
+    }
+    if (r.red) t += "FOUL START (red light).\n";
+    if (r.event === "centerline") t += "DISQUALIFIED (centerline).\n";
+    if (r.event === "engineBlow") t += "DID NOT FINISH (engine).\n";
+    if (r.event === "oppRed") t += "Opponent foul start.\n";
+    return t;
+  }
+
+  function applyRaceResult(r) {
+    S.lastRace = r;
+    S._raceMode = null;
+    if (r.et != null && (S.bestET == null || r.et < S.bestET)) S.bestET = r.et;
+
+    if (r.isQual) {
+      S.qualsLeft = Math.max(0, S.qualsLeft - 1);
+      if (!r.red && !r.dq && r.et != null) {
+        S.qualRuns.push(r);
+        if (S.bestQual == null || r.et < S.bestQual.et) S.bestQual = { et: r.et, mph: r.mph, rt: r.rt };
+      }
+      let body;
+      if (r.red) body = story("qualifyRed", raceVars(r));
+      else if (r.event === "engineBlow") body = story("engineBlow", raceVars(r));
+      else if (r.event === "brokenPart") body = story("brokenPart", raceVars(r));
+      else if (r.event === "smokedTires") body = story("smokedTires", raceVars(r));
+      else if (r.event === "tireShake") body = story("tireShake", raceVars(r));
+      else if (r.event === "qualifyBroke" || r.dq) body = story("qualifyBroke", raceVars(r));
+      else if (S.bestQual && r.et != null && r.et <= S.bestQual.et + 0.0001) body = story("qualifyGood", raceVars(r));
+      else body = story("qualifyBad", raceVars(r));
+      log(S, r.red ? "Red-light qualifying pass." : (r.et != null ? ("Qualifying pass: " + fmtET(r.et) + " at " + fmtMPH(r.mph) + " mph.") : "A qualifying pass ended early."));
+      const art = r.event === "engineBlow" ? ART.smoke : ART.track;
+      showEvent(art, slipText(r) + "\n" + body, [{ label: "Continue", fn: () => afterQualOrBreak(r) }]);
+      return;
+    }
+
+    // eliminations
+    const pool = r.event;
+    const body = story(STORIES[pool] ? pool : (r.win ? "raceWinClean" : "raceLossClean"), raceVars(r));
+    log(S, (r.win ? "Win" : "Loss") + " vs " + r.rival + (r.et != null ? (" — " + fmtET(r.et) + " / " + fmtRT(r.rt)) : " — no time") + ".");
+    const art = r.event === "engineBlow" ? ART.smoke : ART.track;
+    showEvent(art, slipText(r) + "\n" + body, [{ label: "Continue", fn: () => afterElim(r) }]);
+  }
+
+  function afterQualOrBreak(r) {
+    if (r.event === "engineBlow" && S.carHealth <= 0) {
+      endGame(S, false, "car");
+      return;
+    }
+    if (r.event === "engineBlow" && S.carHealth < 25 && S.parts < 1) {
+      // maybe salvage
+      if (S.parts > 0) { S.parts--; S.carHealth = clamp(S.carHealth + 20, 0, 80); }
+    }
+    if (S.carHealth <= 0) { endGame(S, false, "car"); return; }
+    showPits();
+  }
+
+  function afterElim(r) {
+    if (r.event === "engineBlow" && S.carHealth <= 0) { endGame(S, false, "car"); return; }
+    if (S.carHealth <= 0) { endGame(S, false, "car"); return; }
+    if (r.win) winRound();
+    else loseRound(r.event);
+  }
+
+  function winRound() {
+    S.eventW++;
+    S.seasonW++;
+    if (S.opponent && S.opponent._ref) S.opponent._ref.out = true;
+    const pts = S.round === 1 ? 20 : S.round === 2 ? 30 : 50;
+    S.points += pts;
+    if (S.round >= 3) {
+      winEvent();
+      return;
+    }
+    S.round++;
+    S.opponent = null;
+    // advance: remaining field shrinks; pick next opponent
+    pairElim();
+  }
+  function loseRound(why) {
+    S.eventL++;
+    S.seasonL++;
+    S.eventOver = true;
+    S.opponent = null;
+    simulateFieldPoints(false, S.eventW);
+    const tr = currentTrack();
+    let msg, purse = 0;
+    if (S.round >= 3) {
+      purse = Math.round(tr.purse * 0.4);
+      S.cash += purse;
+      msg = story("eventRunner", { track: tr.name, purse: money(purse), team: S.team });
+      log(S, "Runner-up at " + tr.short + " for " + money(purse) + ".");
+    } else {
+      msg = story("eventOut", { track: tr.name, team: S.team });
+      log(S, "Out at " + tr.short + " in round " + S.round + ".");
+    }
+    showEvent(ART.pits, msg, [{ label: "Back to the pits", fn: showPits }]);
+  }
+  function winEvent() {
+    const tr = currentTrack();
+    S.eventW = Math.max(S.eventW, 3);
+    S.eventsWon++;
+    S.eventOver = true;
+    S.opponent = null;
+    S.cash += tr.purse;
+    simulateFieldPoints(true, 3);
+    log(S, "Won " + tr.name + " for " + money(tr.purse) + ".");
+    showEvent(ART.trophy, story("eventWin", { track: tr.name, purse: money(tr.purse), team: S.team }), [
+      { label: "Back to the pits", fn: showPits }
+    ]);
+  }
+
+  function simulateFieldPoints(playerWon, playerRoundsWon) {
+    // one event winner among rivals if player didn't win
+    const riv = S.rivals.slice().sort(() => Math.random() - 0.5);
+    if (!playerWon && riv[0]) {
+      riv[0].points += 80;
+      riv[0].eventsWon++;
+      riv[0].wins += 3;
+    }
+    riv.forEach((r, i) => {
+      if (playerWon && i === 0) { r.points += 70; r.wins += 2; r.losses += 1; return; }
+      if (!playerWon && i === 0) return;
+      const bump = 8 + rand(36);
+      r.points += bump;
+      if (chance(0.5)) r.wins += rand(3);
+      r.losses += rand(3);
+    });
+  }
+
+  function finishSeason() {
+    if (S.over) return;
+    const lead = pointsLeader();
+    if (lead.isPlayer) {
+      const second = S.rivals.reduce((m, r) => Math.max(m, r.points), 0);
+      const kind = (S.points - second <= 30) ? "close" : (S.eventsWon >= 4 ? "swept" : "champ");
+      endGame(S, true, kind);
+    } else if (S.trackIndex >= TRACKS.length - 1) {
+      endGame(S, false, "points");
+    } else {
+      endGame(S, false, "mid");
+    }
+  }
+
+  function showEnd() {
+    clearUI(); showHud(false);
+    el.log.hidden = false;
+    el.log.textContent = (S.log || []).slice(0, 8).join("\n");
+    setArt(S.win ? ART.trophy : (S.endKind === "car" ? ART.smoke : ART.grave));
+    let t = S.win ? "YOU ARE THE CIRCUIT CHAMPION\n\n" : "THE SEASON IS OVER\n\n";
+    t += (S.endMessage || "") + "\n\n";
+    t += S.racer + "  |  " + S.team + "  |  " + S.car + "  |  " + CLASSES[S.cls].name + "\n";
+    t += "Ended: " + fmtDate(S.date) + "\n";
+    t += "Season record: " + S.seasonW + "-" + S.seasonL + "    Event wins: " + S.eventsWon + "\n";
+    t += "Points: " + S.points + "    Cash: " + money(S.cash) + "    Car: " + S.carHealth + "%\n";
+    if (S.bestET != null) t += "Best e.t.: " + fmtET(S.bestET) + "\n";
+    t += "Crew remaining: " + livingCount(S) + "\n\n";
+    t += "SCORE: " + S.score + "  (x" + CLASSES[S.cls].multiplier + " class)\n\n";
+    if (S.graves.length) {
+      t += "GONE FROM THE CREW\n";
+      S.graves.forEach(g => { t += "  " + g.text + "\n"; });
+    }
+    setText(t);
+    choices([
+      { label: "See the Championship Top Ten", fn: showScores },
+      { label: "Run the circuit again", fn: showTitle }
+    ]);
+  }
+
+
+  window.__DragCircuit__ = {
+    getState: function () { return S; },
+    setState: function (g) { S = g; },
+    CLASSES: CLASSES,
+    TRACKS: TRACKS,
+    STORE_ITEMS: STORE_ITEMS,
+    ILLNESSES: ILLNESSES,
+    STORIES: STORIES,
+    showTitle: showTitle,
+    showPits: showPits,
+    showEnd: showEnd,
+    purchaseAndDepart: function (buy) {
+      ui.storeBuy = Object.assign({ slicks: 0, fuel: 0, parts: 0, trans: 0, chutes: 0, food: 0 }, buy || {});
+      const kind = (ui.storeKind === "track" && S && S.started) ? "track" : "start";
+      const prices = pricesAt(kind);
+      const spent = STORE_ITEMS.reduce((n, it) => n + (ui.storeBuy[it.key] || 0) * prices[it.key], 0);
+      checkoutStore(prices, spent, kind === "start" || !(S && S.started));
+    }
+  };
+
+  bindEls();
+  showTitle();
+})();
+</script>
+<script data-goatcounter="https://jrperiod.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
